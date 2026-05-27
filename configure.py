@@ -102,6 +102,39 @@ def pick_from_list(prompt: str, items: list[str]) -> str:
         print(f"  Enter a number between 1 and {len(items)}.")
 
 
+def pick_or_new_bucket(prompt: str, items: list[str], default_new: str) -> str:
+    """
+    Show numbered list of existing buckets plus a '0. enter a new name' option.
+    Returns the chosen bucket name (existing or brand new).
+    """
+    if not items:
+        return ask(
+            "Bucket name", default=default_new,
+            validator=lambda v: None if BUCKET_RE.match(v)
+            else "3-63 chars, lowercase, letters/numbers/hyphens/dots.",
+        )
+    print()
+    for i, item in enumerate(items, 1):
+        print(f"  {i:>3}.  {item}")
+    print(f"    0.  (enter a new bucket name - will be created)")
+    print()
+    while True:
+        raw = input(f"{prompt}: ").strip()
+        if raw == "0":
+            return ask(
+                "New bucket name", default=default_new,
+                validator=lambda v: None if BUCKET_RE.match(v)
+                else "3-63 chars, lowercase, letters/numbers/hyphens/dots.",
+            )
+        try:
+            idx = int(raw)
+            if 1 <= idx <= len(items):
+                return items[idx - 1]
+        except ValueError:
+            pass
+        print(f"  Enter 0 or a number between 1 and {len(items)}.")
+
+
 def header(text: str) -> None:
     print(f"\n{'─' * 60}")
     print(f"  {text}")
@@ -349,12 +382,15 @@ def main() -> None:
     print(f"\n  Source bucket: {source_bucket}")
 
     # ── Log bucket ────────────────────────────────────────────────────────────
-    header("3 / 5  —  Log Bucket  (new, will be created by the stack)")
-    print()
-    log_bucket = ask("Log bucket name",
-                     default=f"{source_bucket}-ai-guard-logs",
-                     validator=lambda v: None if BUCKET_RE.match(v)
-                     else "3-63 chars, lowercase, letters/numbers/hyphens/dots.")
+    header("3 / 5  —  Log Bucket  (pick existing or create new)")
+    # Exclude the source bucket so the user cannot pick it as the log target
+    # (it would self-trigger the scanner on every log write).
+    log_candidates = [b for b in regional if b != source_bucket]
+    log_bucket = pick_or_new_bucket(
+        "Select log bucket or 0 for new [number]",
+        log_candidates,
+        default_new=f"{source_bucket}-ai-guard-logs",
+    )
 
     # ── AI Guard ──────────────────────────────────────────────────────────────
     header("4 / 5  —  Trend Micro AI Guard")

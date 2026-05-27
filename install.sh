@@ -200,13 +200,50 @@ fi
 say "Source bucket: ${BOLD}${SOURCE_BUCKET}${RESET}"
 
 # ── 3/5  Log bucket ──────────────────────────────────────────────────────────
-header "3/5  Log Bucket"
+header "3/5  Log Bucket (pick existing or create new)"
 
-while :; do
-    LOG_BUCKET=$(ask "Log bucket name" "${SOURCE_BUCKET}-ai-guard-logs")
-    valid_bucket "$LOG_BUCKET" && break
-    err "3-63 chars, lowercase, alphanumeric start/end, dots/hyphens OK."
+# Filter the source bucket out of the choice list - using it as the log
+# target would self-trigger the scanner on every log write.
+LOG_CANDIDATES=()
+for b in "${BUCKETS[@]}"; do
+    [[ "$b" != "$SOURCE_BUCKET" ]] && LOG_CANDIDATES+=("$b")
 done
+
+DEFAULT_NEW="${SOURCE_BUCKET}-ai-guard-logs"
+
+if [[ ${#LOG_CANDIDATES[@]} -eq 0 ]]; then
+    # Nothing to pick from - just prompt for a new name
+    while :; do
+        LOG_BUCKET=$(ask "New bucket name" "$DEFAULT_NEW")
+        valid_bucket "$LOG_BUCKET" && break
+        err "3-63 chars, lowercase, alphanumeric start/end, dots/hyphens OK."
+    done
+else
+    say ""
+    i=1
+    for b in "${LOG_CANDIDATES[@]}"; do
+        printf "    %3d. %s\n" "$i" "$b"
+        i=$((i+1))
+    done
+    printf "      0. (enter a new bucket name - will be created)\n"
+    say ""
+    while :; do
+        choice=$(ask "Select log bucket or 0 for new [number]")
+        if [[ "$choice" == "0" ]]; then
+            while :; do
+                LOG_BUCKET=$(ask "New bucket name" "$DEFAULT_NEW")
+                valid_bucket "$LOG_BUCKET" && break
+                err "3-63 chars, lowercase, alphanumeric start/end."
+            done
+            break
+        elif [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#LOG_CANDIDATES[@]} )); then
+            LOG_BUCKET="${LOG_CANDIDATES[$((choice-1))]}"
+            break
+        fi
+        err "Enter 0 or a number between 1 and ${#LOG_CANDIDATES[@]}."
+    done
+fi
+say "Log bucket: ${BOLD}${LOG_BUCKET}${RESET}"
 
 # ── 4/5  AI Guard ────────────────────────────────────────────────────────────
 header "4/5  Trend Micro AI Guard"
