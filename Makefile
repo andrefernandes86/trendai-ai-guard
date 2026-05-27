@@ -1,6 +1,10 @@
-.PHONY: configure build deploy destroy test lint clean validate
+.PHONY: install configure build deploy destroy test lint clean validate
 
-## Full guided setup: collect params, deploy stack, build + upload Lambda code
+## One-shot installer (bash + AWS CLI). Run this if you don't have boto3.
+install:
+	./install.sh
+
+## Full guided setup using Python (same end result as 'install')
 configure:
 	python3 configure.py
 
