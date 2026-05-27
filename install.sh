@@ -266,13 +266,13 @@ say "    4. JP"
 say "    5. SG"
 EP_CHOICE=$(ask "Select endpoint" "1")
 case "$EP_CHOICE" in
-    1) ENDPOINT="https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
-    2) ENDPOINT="https://api.eu.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
-    3) ENDPOINT="https://api.au.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
-    4) ENDPOINT="https://api.jp.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
-    5) ENDPOINT="https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
+    1) ENDPOINT="https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
+    2) ENDPOINT="https://api.eu.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
+    3) ENDPOINT="https://api.au.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
+    4) ENDPOINT="https://api.jp.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
+    5) ENDPOINT="https://api.sg.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
     *) err "Invalid choice, defaulting to US."
-       ENDPOINT="https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan" ;;
+       ENDPOINT="https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
 esac
 
 APP_NAME=$(ask "Application name" "ai-guard-s3-monitor")
@@ -343,8 +343,18 @@ BUILD_DIR=$(mktemp -d)
 ZIP_FILE=$(mktemp).zip
 trap 'rm -rf "$BUILD_DIR" "$ZIP_FILE" 2>/dev/null || true' EXIT
 
-say "Installing Python dependencies..."
-pip3 install -r "${SRC_DIR}/requirements.txt" -t "$BUILD_DIR" -q
+say "Installing Python dependencies (Linux x86_64 wheels for Lambda)..."
+# IMPORTANT: Lambda runs on Linux. Force pip to download Linux wheels
+# regardless of the local OS, otherwise packages with C extensions
+# (lxml, pillow, etc.) get built for macOS and fail at import time.
+pip3 install -r "${SRC_DIR}/requirements.txt" \
+    -t "$BUILD_DIR" \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --python-version 3.12 \
+    --implementation cp \
+    --upgrade \
+    -q
 
 say "Copying source files..."
 cp "${SRC_DIR}"/*.py "$BUILD_DIR/"

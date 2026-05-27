@@ -19,8 +19,6 @@ def save_log_to_s3(
 ) -> None:
     """Write a JSON detection log to the secondary S3 bucket."""
     timestamp = datetime.now(timezone.utc).isoformat()
-    mitre = _extract_mitre(scan_result)
-    owasp = _extract_owasp(scan_result)
 
     entry = {
         "timestamp": timestamp,
@@ -29,8 +27,11 @@ def save_log_to_s3(
         "scan_id": scan_result.get("id"),
         "action": scan_result.get("action"),
         "reasons": scan_result.get("reasons", []),
-        "mitre_attack": mitre,
-        "owasp": owasp,
+        "harmful_content": _harmful_categories(scan_result),
+        "sensitive_information_rules": _sensitive_rules(scan_result),
+        "prompt_attack_detected": _prompt_attack_detected(scan_result),
+        "mitre_attack": _extract_mitre(scan_result),
+        "owasp": _extract_owasp(scan_result),
         "malicious_prompt_snippet": text_snippet[:2000],
         "full_scan_result": scan_result,
     }
@@ -65,18 +66,21 @@ def send_email_notification(
     mitre = _extract_mitre(scan_result)
     owasp = _extract_owasp(scan_result)
     reasons = scan_result.get("reasons", [])
+    harmful = _harmful_categories(scan_result)
+    sensitive = _sensitive_rules(scan_result)
+    prompt_attack = _prompt_attack_detected(scan_result)
     basename = os.path.basename(file_name)
 
     subject = f"[AI Guard Alert] Malicious content detected: {basename}"
 
     lines = [
-        "AI Guard S3 Monitor — Security Alert",
+        "AI Guard S3 Monitor - Security Alert",
         "=" * 50,
         "",
         f"File Name : {file_name}",
         f"SHA-256   : {file_hash}",
         f"Scan ID   : {scan_result.get('id', 'N/A')}",
-        f"Action    : {scan_result.get('action', 'N/A').upper()}",
+        f"Action    : {str(scan_result.get('action', 'N/A')).upper()}",
         "",
         "Detection Reasons:",
     ]
@@ -84,19 +88,33 @@ def send_email_notification(
         msg = reason.get("message", str(reason)) if isinstance(reason, dict) else str(reason)
         lines.append(f"  - {msg}")
 
+    if harmful:
+        lines += ["", "Harmful Content Categories:"]
+        for h in harmful:
+            score = f"  (confidence {h['confidence']:.2f})" if h.get("confidence") is not None else ""
+            lines.append(f"  - {h['category']}{score}")
+
+    if sensitive:
+        lines += ["", "Sensitive Information Rules Triggered:"]
+        for rule_id in sensitive:
+            lines.append(f"  - {rule_id}")
+
+    if prompt_attack:
+        lines += ["", "Prompt Attack Detected: yes"]
+
     if mitre:
         lines += ["", "MITRE ATT&CK References:"]
         lines += [f"  - {r}" for r in mitre]
 
     if owasp:
-        lines += ["", "OWASP / OWASP LLM Top 10 References:"]
+        lines += ["", "OWASP LLM Top 10 References:"]
         lines += [f"  - {r}" for r in owasp]
 
     lines += [
         "",
         "Please review the file immediately and take appropriate action.",
         "",
-        "— AI Guard AWS Monitor",
+        "- AI Guard AWS Monitor",
     ]
 
     ses = boto3.client("ses", region_name=os.environ.get("AWS_REGION", "us-east-1"))
@@ -131,3 +149,51 @@ def _extract_owasp(result: dict) -> list[str]:
         if val:
             ids.update(val if isinstance(val, list) else [val])
     return sorted(ids)
+
+
+# applyGuardrails response has structured detection blocks:
+#   harmfulContent:        [{ category, hasPolicyViolation, confidenceScore }]
+#   sensitiveInformation:  { hasPolicyViolation, rules: [{ id }] }
+#   promptAttacks:         [{ hasPolicyViolation, confidenceScore }]
+
+def _harmful_categories(result: dict) -> list[dict]:
+    """Return only the harmfulContent entries that have a policy violation."""
+    items = result.get("harmfulContent") or []
+    if not isinstance(items, list):
+        return []
+    out = []
+    for item in items:
+        if isinstance(item, dict) and item.get("hasPolicyViolation"):
+            out.append({
+                "category": item.get("category", "unknown"),
+                "confidence": item.get("confidenceScore"),
+            })
+    return out
+
+
+def _sensitive_rules(result: dict) -> list[str]:
+    """Return triggered sensitive-information rule IDs."""
+    block = result.get("sensitiveInformation") or {}
+    if not isinstance(block, dict) or not block.get("hasPolicyViolation"):
+        return []
+    rules = block.get("rules") or []
+    out = []
+    for rule in rules:
+        if isinstance(rule, dict):
+            rid = rule.get("id")
+            if rid:
+                out.append(str(rid))
+        elif rule:
+            out.append(str(rule))
+    return out
+
+
+def _prompt_attack_detected(result: dict) -> bool:
+    """True if any promptAttacks entry reports a policy violation."""
+    items = result.get("promptAttacks") or []
+    if not isinstance(items, list):
+        return False
+    return any(
+        isinstance(item, dict) and item.get("hasPolicyViolation")
+        for item in items
+    )

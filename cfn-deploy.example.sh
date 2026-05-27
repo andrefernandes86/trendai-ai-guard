@@ -21,7 +21,7 @@ aws cloudformation deploy \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --parameter-overrides \
     AIGuardApiKey="YOUR_VISION_ONE_API_KEY" \
-    AIGuardEndpoint="https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan" \
+    AIGuardEndpoint="https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" \
     AIGuardAppName="ai-guard-s3-monitor" \
     SourceBucketName="my-existing-source-bucket" \
     LogBucketName="my-ai-guard-logs" \

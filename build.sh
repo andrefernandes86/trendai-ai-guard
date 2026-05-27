@@ -51,8 +51,16 @@ ZIP_FILE="$(mktemp).zip"
 cleanup() { rm -rf "$BUILD_DIR" "$ZIP_FILE" 2>/dev/null || true; }
 trap cleanup EXIT
 
-echo ">>> Installing Python dependencies..."
-pip3 install -r src/requirements.txt -t "$BUILD_DIR/" -q
+echo ">>> Installing Python dependencies (Linux x86_64 wheels for Lambda)..."
+# Lambda runs on Linux; force pip to grab Linux wheels even if we're on macOS.
+pip3 install -r src/requirements.txt \
+    -t "$BUILD_DIR/" \
+    --platform manylinux2014_x86_64 \
+    --only-binary=:all: \
+    --python-version 3.12 \
+    --implementation cp \
+    --upgrade \
+    -q
 
 echo ">>> Copying Lambda source files..."
 cp src/*.py "$BUILD_DIR/"

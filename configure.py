@@ -28,11 +28,11 @@ STACK_NAME    = "ai-guard-monitor"
 LAMBDA_S3_KEY = "lambda/package.zip"
 
 ENDPOINT_OPTIONS = {
-    "1": ("US (default)", "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
-    "2": ("EU",           "https://api.eu.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
-    "3": ("AU",           "https://api.au.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
-    "4": ("JP",           "https://api.jp.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
-    "5": ("SG",           "https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
+    "1": ("US (default)", "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"),
+    "2": ("EU",           "https://api.eu.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"),
+    "3": ("AU",           "https://api.au.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"),
+    "4": ("JP",           "https://api.jp.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"),
+    "5": ("SG",           "https://api.sg.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"),
 }
 
 EMAIL_RE  = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
@@ -291,11 +291,20 @@ def ensure_log_bucket(boto3, bucket_name: str, region: str) -> str:
 def build_and_upload(bucket: str, region: str, boto3) -> None:
     """Package src/ + dependencies and upload to s3://<bucket>/lambda/package.zip."""
     with tempfile.TemporaryDirectory() as build_dir:
-        print("\n  Installing Python dependencies...")
+        print("\n  Installing Python dependencies (Linux x86_64 wheels for Lambda)...")
+        # Lambda runs on Linux; force pip to grab Linux wheels even if we're
+        # on macOS, otherwise C-extension packages (lxml, pillow, etc.) get
+        # built for the local OS and fail at import time inside Lambda.
         subprocess.run(
             [sys.executable, "-m", "pip", "install",
              "-r", str(SRC_DIR / "requirements.txt"),
-             "-t", build_dir, "-q"],
+             "-t", build_dir,
+             "--platform", "manylinux2014_x86_64",
+             "--only-binary=:all:",
+             "--python-version", "3.12",
+             "--implementation", "cp",
+             "--upgrade",
+             "-q"],
             check=True,
         )
         print("  Copying Lambda source files...")

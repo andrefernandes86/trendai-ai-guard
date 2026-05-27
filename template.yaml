@@ -76,13 +76,13 @@ Parameters:
 
   AIGuardEndpoint:
     Type: String
-    Default: "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+    Default: "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
     AllowedValues:
-      - "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
-      - "https://api.eu.xdr.trendmicro.com/v3.0/xdr/guard/scan"
-      - "https://api.au.xdr.trendmicro.com/v3.0/xdr/guard/scan"
-      - "https://api.jp.xdr.trendmicro.com/v3.0/xdr/guard/scan"
-      - "https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+      - "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
+      - "https://api.eu.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
+      - "https://api.au.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
+      - "https://api.jp.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
+      - "https://api.sg.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
     Description: >
       Select the endpoint that matches your Vision One tenant region.
       US = api.xdr  |  EU = api.eu.xdr  |  AU = api.au.xdr
