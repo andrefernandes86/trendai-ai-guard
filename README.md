@@ -180,7 +180,7 @@ alert, and a JSON file under `s3://<log-bucket>/logs/YYYY/MM/DD/`.
 |---|---|---|---|
 | `AIGuardApiKey` | Yes | — | Vision One API key (`NoEcho`) |
 | `AIGuardEndpoint` | No | US endpoint | Regional AI Guard URL |
-| `AIGuardAppName` | No | `ai-guard-s3-monitor` | `TMV1-Application-Name` header |
+| `AIGuardAppName` | No | `ai-guard-s3-monitor` | Fallback value for the `TMV1-Application-Name` header; only used when the auto-derived per-scan name (see below) sanitizes to empty |
 | `SourceBucketName` | Yes | — | **Existing** bucket to monitor |
 | `LogBucketName` | Yes | — | Bucket for detection logs (created if absent) |
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
@@ -194,6 +194,27 @@ alert, and a JSON file under `s3://<log-bucket>/logs/YYYY/MM/DD/`.
 The Lambda deploy bucket name is derived inside the template
 (`${AWS::StackName}-deploy-${AWS::AccountId}`) and is **not** a parameter — the
 installer creates it before the stack runs.
+
+---
+
+## How each scan is identified in Vision One
+
+Every scan request the Lambda makes to AI Guard carries a
+`TMV1-Application-Name` header set to the **source bucket + file name**.
+That makes it easy to see which file produced which audit entry in
+Vision One.
+
+For example, uploading `report-Q3.pdf` to bucket `demo-v1-fs-upload`
+sends a scan tagged as:
+
+```
+TMV1-Application-Name: demo-v1-fs-upload_report-Q3_pdf
+```
+
+The header is auto-sanitized to satisfy Trend's constraint
+(`[a-zA-Z0-9_-]`, max 64 chars). The `AIGuardAppName` parameter is now
+only used as a fallback if the bucket+file string sanitizes to empty
+(extremely rare — e.g. an empty key).
 
 ---
 

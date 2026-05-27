@@ -47,7 +47,7 @@ Metadata:
     ParameterLabels:
       AIGuardApiKey:            { default: "Vision One API Key" }
       AIGuardEndpoint:          { default: "AI Guard Endpoint  (choose your region)" }
-      AIGuardAppName:           { default: "Application Name  (TMV1-Application-Name header)" }
+      AIGuardAppName:           { default: "Application Name (fallback only - scans are tagged with bucket+file)" }
       SourceBucketName:         { default: "Existing S3 Bucket to Monitor" }
       LogBucketName:            { default: "New S3 Bucket for Detection Logs  (must be globally unique)" }
       NotificationEmail:        { default: "Alert Recipient Email" }
@@ -95,8 +95,10 @@ Parameters:
     AllowedPattern: "[a-zA-Z0-9_-]+"
     ConstraintDescription: "Letters, numbers, hyphens, and underscores only."
     Description: >
-      Identifier sent in every request as the TMV1-Application-Name header.
-      Appears in Vision One audit logs so you can trace activity back to this stack.
+      Fallback value for the TMV1-Application-Name header. Each scan is
+      normally tagged with the source bucket and file name (e.g.
+      'my-bucket_report_pdf'); this value is only used if that
+      auto-derived name sanitizes to empty.
 
   # ── Storage ─────────────────────────────────────────────────────────────────
 

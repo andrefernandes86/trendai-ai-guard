@@ -414,7 +414,9 @@ def main() -> None:
                  validator=lambda v: None if v in ENDPOINT_OPTIONS
                  else f"Enter 1-{len(ENDPOINT_OPTIONS)}.")
     ep_label, endpoint_url = ENDPOINT_OPTIONS[ep_key]
-    app_name = ask("\nApplication name", default="ai-guard-s3-monitor",
+    print("\n  Note: each scan is tagged with '<bucket>/<file>' automatically.")
+    print("  This 'Application name' is only used as a fallback identifier.")
+    app_name = ask("Fallback application name", default="ai-guard-s3-monitor",
                    validator=lambda v: None if re.match(r"^[a-zA-Z0-9_-]{1,64}$", v)
                    else "Letters, numbers, hyphens, underscores only (max 64 chars).")
 
@@ -453,7 +455,7 @@ def main() -> None:
         ("Log bucket",             log_bucket),
         ("Lambda deploy bucket",   deploy_bucket),
         ("AI Guard endpoint",      ep_label),
-        ("App name",               app_name),
+        ("Fallback app name",      app_name),
         ("Alert recipient",        notification_email or "(disabled)"),
         ("SES sender",             ses_sender or "(disabled)"),
         ("Max text",               f"{max_text_kb} KB"),

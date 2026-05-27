@@ -275,7 +275,10 @@ case "$EP_CHOICE" in
        ENDPOINT="https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails" ;;
 esac
 
-APP_NAME=$(ask "Application name" "ai-guard-s3-monitor")
+say ""
+say "  Note: each scan is tagged with '<bucket>/<file>' automatically."
+say "  This 'Application name' is only used as a fallback identifier."
+APP_NAME=$(ask "Fallback application name" "ai-guard-s3-monitor")
 
 # ── 5/5  Settings ────────────────────────────────────────────────────────────
 header "5/5  Notifications & Tuning"
@@ -312,7 +315,7 @@ printf '  %-26s %s\n'  "Source bucket"           "$SOURCE_BUCKET"
 printf '  %-26s %s\n'  "Log bucket"              "$LOG_BUCKET"
 printf '  %-26s %s\n'  "Lambda deploy bucket"    "$DEPLOY_BUCKET"
 printf '  %-26s %s\n'  "AI Guard endpoint"       "$ENDPOINT"
-printf '  %-26s %s\n'  "Application name"        "$APP_NAME"
+printf '  %-26s %s\n'  "Fallback app name"       "$APP_NAME"
 printf '  %-26s %s\n'  "Alert recipient"         "${NOTIFICATION_EMAIL:-(disabled)}"
 printf '  %-26s %s\n'  "SES sender"              "${SES_SENDER:-(disabled)}"
 printf '  %-26s %s KB\n' "Max text"              "$MAX_TEXT_KB"

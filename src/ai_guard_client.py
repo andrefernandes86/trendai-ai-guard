@@ -61,6 +61,7 @@ class AIGuardClient:
             else self.default_app_name
         )
         headers = {**self._base_headers, "TMV1-Application-Name": effective_app_name}
+        logger.info("TMV1-Application-Name: %s", effective_app_name)
 
         payload = {"prompt": text}
         last_exc: Exception | None = None
