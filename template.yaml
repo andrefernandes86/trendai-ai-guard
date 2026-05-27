@@ -1,10 +1,15 @@
 AWSTemplateFormatVersion: "2010-09-09"
 
 Description: >
-  AI Guard S3 Document Monitor
-  Attaches to an existing S3 bucket and scans every uploaded document
-  (PDF, DOCX, XLSX, PPTX, TXT, CSV, and more) with Trend Micro AI Guard.
-  Sends an email alert and saves a structured JSON log on each detection.
+  AI Guard S3 Document Monitor.
+  IMPORTANT: deploy this template with 'python3 configure.py' - it
+  creates the Lambda deployment bucket and uploads the code before
+  CloudFormation runs. Deploying directly via the Console wizard
+  will fail with 'NoSuchBucket' because the Lambda code must exist
+  in S3 before the stack can create the function.
+  Once deployed, scans every uploaded document (PDF, DOCX, XLSX,
+  PPTX, TXT, CSV, and more) with Trend Micro AI Guard, sends an
+  email alert, and writes a structured JSON log on each detection.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Console UI grouping & labels
