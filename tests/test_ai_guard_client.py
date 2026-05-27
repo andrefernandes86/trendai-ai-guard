@@ -7,7 +7,7 @@ import responses as resp_mock
 import pytest
 from ai_guard_client import AIGuardClient
 
-ENDPOINT = "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+ENDPOINT = "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
 
 
 def _client():

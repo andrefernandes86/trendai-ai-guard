@@ -1,13 +1,9 @@
-# Secrets — never commit
+# Secrets - never commit
 .env
-samconfig.toml
 cfn-deploy.sh
 cfn-parameters.json
 *.pem
 *.key
-
-# SAM / CloudFormation build output
-.aws-sam/
 
 # Python
 __pycache__/

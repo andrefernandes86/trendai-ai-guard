@@ -18,8 +18,11 @@ build:
 deploy:
 	./cfn-deploy.sh
 
-## Delete the CloudFormation stack
-## (Lambda deploy bucket and log bucket are retained — delete manually if needed)
+## Delete the CloudFormation stack. This also removes the S3 event
+## notification from the source bucket (via the helper custom resource).
+## The two S3 buckets created by the installer (deploy bucket and log
+## bucket) are NOT in the stack and must be deleted manually if desired.
+## See README -> "Uninstalling the solution" for the full teardown.
 destroy:
 	aws cloudformation delete-stack \
 	  --stack-name $(or $(STACK),ai-guard-monitor) \
@@ -40,4 +43,4 @@ lint:
 
 ## Remove build artefacts
 clean:
-	rm -rf .aws-sam/ __pycache__ src/__pycache__
+	rm -rf __pycache__ src/__pycache__ .pytest_cache

@@ -10,7 +10,7 @@ import pytest
 import responses as resp_mock
 from moto import mock_aws
 
-ENDPOINT = "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+ENDPOINT = "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails"
 SOURCE_BUCKET = "test-source-bucket"
 LOG_BUCKET = "test-log-bucket"
 
@@ -20,7 +20,7 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("AI_GUARD_ENDPOINT", ENDPOINT)
     monkeypatch.setenv("AI_GUARD_APP_NAME", "test-app")
     monkeypatch.setenv("LOG_BUCKET_NAME", LOG_BUCKET)
-    monkeypatch.setenv("NOTIFICATION_EMAIL", "af.us@outlook.com")
+    monkeypatch.setenv("NOTIFICATION_EMAIL", "recipient@example.com")
     monkeypatch.setenv("SES_SENDER_EMAIL", "sender@example.com")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
 

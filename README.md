@@ -165,12 +165,123 @@ alert, and a JSON file under `s3://<log-bucket>/logs/YYYY/MM/DD/`.
 | Change a config value (memory, timeout, email, ...) | edit `cfn-deploy.sh` then `./cfn-deploy.sh` |
 | View stack outputs | `aws cloudformation describe-stacks --stack-name ai-guard-monitor --query 'Stacks[0].Outputs' --output table` |
 | List detection logs | `aws s3 ls s3://<log-bucket>/logs/ --recursive` |
-| Tear down (Lambda + IAM + dashboard) | `make destroy` |
+| Delete the stack only (keeps buckets) | `make destroy` |
+| **Fully uninstall everything** | see [Uninstalling the solution](#uninstalling-the-solution) below |
 
-> The deploy bucket and the log bucket are **not** destroyed by `make destroy`
-> — they are created outside the stack. Delete them manually if you want a
-> truly clean slate. The log bucket additionally has `DeletionPolicy: Retain`
-> on the lifecycle rules in case you re-create the stack later.
+---
+
+## Uninstalling the solution
+
+What the installer puts into your AWS account:
+
+| # | Resource | Created by | Removed by |
+|---|---|---|---|
+| 1 | CloudFormation stack `ai-guard-monitor` (Lambda, IAM roles, log groups, alarms, dashboard) | CloudFormation | `aws cloudformation delete-stack` |
+| 2 | S3 event-notification on your **source bucket** | The stack's custom resource | `aws cloudformation delete-stack` (the custom resource cleans itself up) |
+| 3 | Lambda deployment bucket `<stack-name>-deploy-<account-id>` | The installer, via boto3 | Manual |
+| 4 | Log bucket (only if it didn't exist before install) | The installer, via boto3 | Manual |
+| 5 | SES verified sender identity | You, via `aws ses verify-email-identity` | Manual |
+| 6 | Local helper files: `cfn-deploy.sh`, `cfn-parameters.json` | The installer | Manual |
+
+### Step 1 — Delete the CloudFormation stack
+
+This removes the Lambda, all IAM roles, the log groups, the optional
+dashboard and alarms, **and** the S3 event notification on your source
+bucket (the custom-resource Lambda runs on Delete and cleans it up).
+
+```bash
+STACK=ai-guard-monitor
+REGION=us-east-1
+
+aws cloudformation delete-stack --stack-name "$STACK" --region "$REGION"
+aws cloudformation wait stack-delete-complete --stack-name "$STACK" --region "$REGION"
+```
+
+If `wait` exits with an error, look at the stack events for what's
+stuck:
+```bash
+aws cloudformation describe-stack-events --stack-name "$STACK" --region "$REGION" \
+  --max-items 30 --query 'StackEvents[?contains(ResourceStatus, `FAILED`)].[LogicalResourceId,ResourceStatusReason]' --output table
+```
+
+### Step 2 — Delete the Lambda deployment bucket
+
+This bucket lives outside the stack and isn't auto-deleted. Empty it
+first (S3 won't delete a non-empty bucket), then remove it.
+
+```bash
+ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+DEPLOY_BUCKET="${STACK}-deploy-${ACCOUNT}"
+
+aws s3 rm "s3://${DEPLOY_BUCKET}" --recursive --region "$REGION"
+aws s3 rb "s3://${DEPLOY_BUCKET}" --region "$REGION"
+```
+
+### Step 3 — Delete the log bucket (optional)
+
+**Skip this** if you want to keep your detection history. Otherwise:
+
+```bash
+LOG_BUCKET=<the-log-bucket-name-you-chose>
+
+# If versioning was enabled (it is by default for buckets the installer
+# created), every version must be deleted before the bucket can be removed.
+aws s3api list-object-versions --bucket "$LOG_BUCKET" --region "$REGION" \
+  --query '{Objects: Versions[].{Key:Key,VersionId:VersionId}}' --output json > /tmp/versions.json
+aws s3api list-object-versions --bucket "$LOG_BUCKET" --region "$REGION" \
+  --query '{Objects: DeleteMarkers[].{Key:Key,VersionId:VersionId}}' --output json > /tmp/markers.json
+[ -s /tmp/versions.json ] && aws s3api delete-objects --bucket "$LOG_BUCKET" --region "$REGION" --delete file:///tmp/versions.json
+[ -s /tmp/markers.json ]  && aws s3api delete-objects --bucket "$LOG_BUCKET" --region "$REGION" --delete file:///tmp/markers.json
+
+aws s3 rm "s3://${LOG_BUCKET}" --recursive --region "$REGION"
+aws s3 rb "s3://${LOG_BUCKET}" --region "$REGION"
+```
+
+> Note: if you picked an **existing** bucket as the log bucket during
+> install, the installer didn't enable versioning on it — only the
+> standard `aws s3 rm` + `aws s3 rb` is needed.
+
+### Step 4 — Remove the SES verified sender (optional)
+
+Only if you set up email alerts.
+
+```bash
+SES_SENDER=<the-email-you-verified>
+aws ses delete-identity --identity "$SES_SENDER" --region "$REGION"
+```
+
+### Step 5 — Clean up local files
+
+The installer writes a deploy script that contains your AI Guard API
+key. Remove it.
+
+```bash
+cd /path/to/trendai-ai-guard
+rm -f cfn-deploy.sh cfn-parameters.json
+```
+
+### Verifying nothing was missed
+
+A quick post-uninstall check that there's no lingering AI Guard
+footprint in your account:
+
+```bash
+# Stack should be gone
+aws cloudformation describe-stacks --stack-name ai-guard-monitor --region "$REGION" 2>&1 | grep -q "does not exist" && echo "[OK] stack gone"
+
+# Deploy bucket should be gone
+aws s3 ls | grep -q "${STACK}-deploy-${ACCOUNT}" && echo "[!] deploy bucket still present" || echo "[OK] deploy bucket gone"
+
+# Source bucket should have no Lambda notification pointing at our function
+aws s3api get-bucket-notification-configuration --bucket <your-source-bucket> --region "$REGION" \
+  --query 'LambdaFunctionConfigurations[?contains(LambdaFunctionArn, `ai-guard-monitor-scanner`)]' --output table
+
+# CloudWatch log groups should be gone
+aws logs describe-log-groups --region "$REGION" --log-group-name-prefix /aws/lambda/ai-guard-monitor \
+  --query 'logGroups[].logGroupName' --output table
+```
+
+If any of those still report results, repeat the corresponding step.
 
 ---
 
