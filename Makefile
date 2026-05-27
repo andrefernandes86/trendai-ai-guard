@@ -1,21 +1,25 @@
 .PHONY: configure build deploy destroy test lint clean validate
 
-## Interactive setup: pick S3 bucket, build Lambda, generate cfn-deploy.sh
+## Full guided setup: collect params, deploy stack, build + upload Lambda code
 configure:
 	python3 configure.py
 
-## Package Lambda code and upload to S3 (requires BUCKET variable)
-## Usage: make build BUCKET=my-deploy-bucket REGION=us-east-1
+## Upload a new Lambda package to the stack's deployment bucket
+## Usage: make build           (reads stack name from default: ai-guard-monitor)
+##        make build STACK=my-stack REGION=us-east-1
 build:
-	./build.sh $(BUCKET) $(REGION)
+	./build.sh $(or $(STACK),ai-guard-monitor) $(or $(REGION),us-east-1)
 
-## Deploy the stack using generated cfn-deploy.sh
+## Re-deploy using the generated cfn-deploy.sh
 deploy:
 	./cfn-deploy.sh
 
-## Tear down the stack (log bucket is retained by DeletionPolicy: Retain)
+## Delete the CloudFormation stack
+## (Lambda deploy bucket and log bucket are retained — delete manually if needed)
 destroy:
-	aws cloudformation delete-stack --stack-name ai-guard-monitor --region $(REGION)
+	aws cloudformation delete-stack \
+	  --stack-name $(or $(STACK),ai-guard-monitor) \
+	  --region $(or $(REGION),us-east-1)
 
 ## Validate the CloudFormation template
 validate:
