@@ -57,8 +57,11 @@ def send_email_notification(
     file_hash: str,
     scan_result: dict,
 ) -> None:
-    """Send an SES alert email to *recipient*."""
-    sender = os.environ.get("SES_SENDER_EMAIL", recipient)
+    """Send an SES alert email to *recipient*. No-ops if recipient is empty."""
+    if not recipient:
+        logger.info("NotificationEmail is not set, skipping email alert")
+        return
+    sender = os.environ.get("SES_SENDER_EMAIL") or recipient
     mitre = _extract_mitre(scan_result)
     owasp = _extract_owasp(scan_result)
     reasons = scan_result.get("reasons", [])

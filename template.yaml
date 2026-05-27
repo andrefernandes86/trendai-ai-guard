@@ -14,30 +14,30 @@ Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
       - Label:
-          default: "1 ─ Trend Micro AI Guard"
+          default: "1 - Trend Micro AI Guard"
         Parameters:
           - AIGuardApiKey
           - AIGuardEndpoint
           - AIGuardAppName
       - Label:
-          default: "2 ─ Storage"
+          default: "2 - Storage"
         Parameters:
           - SourceBucketName
           - LogBucketName
       - Label:
-          default: "3 ─ Email Notifications (Amazon SES)"
+          default: "3 - Email Notifications (Amazon SES) - optional"
         Parameters:
           - NotificationEmail
           - SESVerifiedSender
       - Label:
-          default: "4 ─ Scanner Tuning"
+          default: "4 - Scanner Tuning"
         Parameters:
           - MaxTextKB
           - LambdaMemoryMB
           - LambdaTimeoutSeconds
           - LogRetentionDays
       - Label:
-          default: "5 ─ CloudWatch Monitoring (optional)"
+          default: "5 - CloudWatch Monitoring (optional)"
         Parameters:
           - EnableCloudWatchMonitoring
     ParameterLabels:
@@ -67,7 +67,7 @@ Parameters:
     MinLength: 10
     Description: >
       Trend Micro Vision One API key used to authenticate with AI Guard.
-      Create one at: Vision One Console → Administration → API Keys.
+      Create one at: Vision One Console -> Administration -> API Keys.
       Requires the AI Guard permission scope.
 
   AIGuardEndpoint:
@@ -98,35 +98,48 @@ Parameters:
 
   SourceBucketName:
     Type: String
+    AllowedPattern: "[a-z0-9][a-z0-9.\\-]{1,61}[a-z0-9]"
+    ConstraintDescription: >
+      3-63 characters. Lowercase letters, numbers, hyphens, and dots only.
+      Must start and end with a letter or number. Example: my-documents-bucket
     Description: >
-      Name of the EXISTING S3 bucket you want to monitor. The bucket must be in
-      the same AWS region as this stack. A Lambda notification will be added
-      automatically — no manual bucket configuration is needed.
+      Name of the EXISTING S3 bucket you want to monitor.
+      Format: lowercase letters, numbers, hyphens, dots. Example: my-documents-bucket
+      The bucket must be in the same AWS region as this stack.
+      A Lambda notification will be added automatically - no manual configuration needed.
 
   LogBucketName:
     Type: String
+    AllowedPattern: "[a-z0-9][a-z0-9.\\-]{1,61}[a-z0-9]"
+    ConstraintDescription: >
+      3-63 characters. Lowercase letters, numbers, hyphens, and dots only.
+      Must start and end with a letter or number. Example: my-ai-guard-logs
     Description: >
-      Name for the NEW S3 bucket created to store detection logs.
-      Must be globally unique. Logs are stored under logs/YYYY/MM/DD/.
-      Objects are auto-archived to Glacier after 90 days and deleted after 7 years.
+      Name for the NEW S3 bucket that will store detection logs. Must be globally unique across all AWS accounts.
+      Format: lowercase letters, numbers, hyphens, dots. Example: my-ai-guard-logs
+      Logs are stored under logs/YYYY/MM/DD/. Auto-archived to Glacier after 90 days, deleted after 7 years.
 
   # ── Notifications ────────────────────────────────────────────────────────────
 
   NotificationEmail:
     Type: String
-    Default: "af.us@outlook.com"
-    AllowedPattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"
-    ConstraintDescription: "Must be a valid email address."
-    Description: "Email address that receives security alert notifications when a malicious document is detected."
+    Default: ""
+    AllowedPattern: "(|[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})"
+    ConstraintDescription: "Must be a valid email address or left blank to disable email alerts."
+    Description: >
+      Email address that receives an alert when a malicious document is detected.
+      Leave blank to disable email alerts (detections will still be logged to S3).
+      Example: security-team@example.com
 
   SESVerifiedSender:
     Type: String
-    AllowedPattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"
-    ConstraintDescription: "Must be a valid email address."
+    Default: ""
+    AllowedPattern: "(|[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,})"
+    ConstraintDescription: "Must be a valid email address or left blank."
     Description: >
-      Email address used as the FROM address for alerts.
-      This address MUST be verified in Amazon SES before alerts will be delivered.
-      To verify after deployment run the command shown in the Outputs tab.
+      Email address used as the FROM address for alerts. Must be verified in Amazon SES.
+      Required only if NotificationEmail is set. Leave blank if not using email alerts.
+      To verify: AWS Console -> SES -> Verified identities -> Create identity.
 
   # ── Scanner Tuning ───────────────────────────────────────────────────────────
 
@@ -177,6 +190,7 @@ Parameters:
 # ──────────────────────────────────────────────────────────────────────────────
 Conditions:
   MonitoringEnabled: !Equals [!Ref EnableCloudWatchMonitoring, "Yes"]
+  EmailEnabled: !Not [!Equals [!Ref NotificationEmail, ""]]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Resources
@@ -524,8 +538,9 @@ Outputs:
     Value: !Sub "s3://${LogBucketName}/logs/"
 
   SESVerifyCommand:
+    Condition: EmailEnabled
     Description: >
-      ACTION REQUIRED — Run this command to verify the SES sender email.
+      ACTION REQUIRED - Run this command to verify the SES sender email.
       Alerts will not be delivered until the address is verified.
     Value: !Sub "aws ses verify-email-identity --email-address ${SESVerifiedSender} --region ${AWS::Region}"
 
