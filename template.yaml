@@ -401,7 +401,6 @@ Resources:
     Type: Custom::S3BucketNotification
     DependsOn:
       - S3InvokePermission        # permission must exist before we attach the notification
-      - NotificationHelperFunction
     Properties:
       ServiceToken: !GetAtt NotificationHelperFunction.Arn
       BucketName:  !Ref SourceBucketName
