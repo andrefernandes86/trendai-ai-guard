@@ -114,9 +114,10 @@ Parameters:
       3-63 characters. Lowercase letters, numbers, hyphens, and dots only.
       Must start and end with a letter or number. Example: my-ai-guard-logs
     Description: >
-      Name for the NEW S3 bucket that will store detection logs. Must be globally unique across all AWS accounts.
+      Name of the S3 bucket that will store detection logs.
+      configure.py creates it if it does not exist, or reuses it if it does.
       Format: lowercase letters, numbers, hyphens, dots. Example: my-ai-guard-logs
-      Logs are stored under logs/YYYY/MM/DD/. Auto-archived to Glacier after 90 days, deleted after 7 years.
+      Logs are stored under logs/YYYY/MM/DD/.
 
   # ── Notifications ────────────────────────────────────────────────────────────
 
@@ -196,37 +197,13 @@ Conditions:
 # ──────────────────────────────────────────────────────────────────────────────
 Resources:
 
-  # ── 1. Log Bucket ─────────────────────────────────────────────────────────
+  # Note: the LOG bucket and the LAMBDA DEPLOY bucket are both created by
+  # configure.py via boto3 before this stack runs. The template only
+  # references them by name (see ScannerRole and ScannerFunction below).
+  # This lets users reuse an existing bucket as the log destination
+  # without CloudFormation failing on "bucket already exists".
 
-  LogBucket:
-    Type: AWS::S3::Bucket
-    DeletionPolicy: Retain      # keep logs even if the stack is deleted
-    UpdateReplacePolicy: Retain
-    Properties:
-      BucketName: !Ref LogBucketName
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      VersioningConfiguration:
-        Status: Enabled
-      LifecycleConfiguration:
-        Rules:
-          - Id: ArchiveToGlacier
-            Status: Enabled
-            Transitions:
-              - TransitionInDays: 90
-                StorageClass: GLACIER
-          - Id: ExpireAfter7Years
-            Status: Enabled
-            ExpirationInDays: 2555
-
-  # ── 3. IAM Role for the Scanner Lambda ───────────────────────────────────
+  # ── 1. IAM Role for the Scanner Lambda ───────────────────────────────────
 
   ScannerRole:
     Type: AWS::IAM::Role
@@ -263,10 +240,13 @@ Resources:
                   - ses:SendRawEmail
                 Resource: "*"
 
-  # ── 4. Scanner Lambda ─────────────────────────────────────────────────────
+  # ── 2. Scanner Lambda ─────────────────────────────────────────────────────
 
   ScannerFunction:
     Type: AWS::Lambda::Function
+    # Ensure the log group exists before the Lambda is created, so the
+    # CFN-managed log group "wins" over the one Lambda would auto-create.
+    DependsOn: ScannerLogGroup
     Properties:
       FunctionName: !Sub "${AWS::StackName}-scanner"
       Code:
@@ -293,8 +273,11 @@ Resources:
 
   ScannerLogGroup:
     Type: AWS::Logs::LogGroup
+    # Name must match the FunctionName above. We use !Sub on StackName
+    # (not !Ref ScannerFunction) so there is no circular dependency with
+    # the Lambda function's DependsOn.
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${ScannerFunction}"
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-scanner"
       RetentionInDays: !Ref LogRetentionDays
 
   # Allow the source S3 bucket to invoke the scanner
@@ -307,7 +290,7 @@ Resources:
       SourceArn: !Sub "arn:aws:s3:::${SourceBucketName}"
       SourceAccount: !Ref AWS::AccountId
 
-  # ── 5. Custom Resource — attach notification to existing S3 bucket ────────
+  # ── 3. Custom Resource - attach notification to existing S3 bucket ────────
   #
   # CloudFormation can only manage notification configs on buckets it creates.
   # This small helper Lambda calls PutBucketNotificationConfiguration on the
@@ -338,8 +321,15 @@ Resources:
                   - s3:PutBucketNotification
                 Resource: !Sub "arn:aws:s3:::${SourceBucketName}"
 
+  NotificationHelperLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-notif-helper"
+      RetentionInDays: 7
+
   NotificationHelperFunction:
     Type: AWS::Lambda::Function
+    DependsOn: NotificationHelperLogGroup
     Properties:
       FunctionName: !Sub "${AWS::StackName}-notif-helper"
       Runtime: python3.12
@@ -412,7 +402,7 @@ Resources:
               resp.pop("ResponseMetadata", None)
               return resp
 
-  # Trigger the helper — this is the actual CloudFormation custom resource
+  # Trigger the helper - this is the actual CloudFormation custom resource
   BucketNotification:
     Type: Custom::S3BucketNotification
     DependsOn:
@@ -422,7 +412,7 @@ Resources:
       BucketName:  !Ref SourceBucketName
       LambdaArn:   !GetAtt ScannerFunction.Arn
 
-  # ── 6. CloudWatch Monitoring (conditional) ────────────────────────────────
+  # ── 4. CloudWatch Monitoring (conditional) ────────────────────────────────
 
   # Alarm fires when the scanner Lambda throws any error
   LambdaErrorAlarm:
@@ -449,7 +439,7 @@ Resources:
     Condition: MonitoringEnabled
     DependsOn: ScannerLogGroup
     Properties:
-      LogGroupName: !Sub "/aws/lambda/${ScannerFunction}"
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-scanner"
       FilterPattern: '"Malicious content detected"'
       MetricTransformations:
         - MetricName: BlockedDetections

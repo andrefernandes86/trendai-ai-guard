@@ -171,6 +171,88 @@ def ensure_deploy_bucket(boto3, bucket_name: str, region: str) -> None:
     )
 
 
+def ensure_log_bucket(boto3, bucket_name: str, region: str) -> str:
+    """
+    Create the log bucket with our recommended settings if it does not exist.
+    If it already exists, leave it untouched (the user may have their own
+    configuration we should not overwrite).
+
+    Returns "created" or "existing" so the caller can show the right message.
+    """
+    s3 = boto3.client("s3", region_name=region)
+
+    # First check whether the bucket already exists (and we own it)
+    try:
+        s3.head_bucket(Bucket=bucket_name)
+        return "existing"
+    except Exception:
+        # 404 / NoSuchBucket / Forbidden -> attempt to create below
+        pass
+
+    # Create the bucket
+    try:
+        if region == "us-east-1":
+            s3.create_bucket(Bucket=bucket_name)
+        else:
+            s3.create_bucket(
+                Bucket=bucket_name,
+                CreateBucketConfiguration={"LocationConstraint": region},
+            )
+    except s3.exceptions.BucketAlreadyOwnedByYou:
+        return "existing"
+    except Exception as exc:
+        if "BucketAlreadyOwnedByYou" in str(exc):
+            return "existing"
+        raise
+
+    # Apply recommended settings (only on newly created buckets)
+    s3.put_public_access_block(
+        Bucket=bucket_name,
+        PublicAccessBlockConfiguration={
+            "BlockPublicAcls": True,
+            "BlockPublicPolicy": True,
+            "IgnorePublicAcls": True,
+            "RestrictPublicBuckets": True,
+        },
+    )
+    s3.put_bucket_encryption(
+        Bucket=bucket_name,
+        ServerSideEncryptionConfiguration={
+            "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "AES256"}}]
+        },
+    )
+    s3.put_bucket_versioning(
+        Bucket=bucket_name,
+        VersioningConfiguration={"Status": "Enabled"},
+    )
+    s3.put_bucket_lifecycle_configuration(
+        Bucket=bucket_name,
+        LifecycleConfiguration={
+            "Rules": [
+                {
+                    "ID": "ArchiveToGlacier",
+                    "Status": "Enabled",
+                    "Filter": {"Prefix": "logs/"},
+                    "Transitions": [{"Days": 90, "StorageClass": "GLACIER"}],
+                },
+                {
+                    "ID": "ExpireAfter7Years",
+                    "Status": "Enabled",
+                    "Filter": {"Prefix": "logs/"},
+                    "Expiration": {"Days": 2555},
+                },
+                {
+                    "ID": "CleanUpOldVersions",
+                    "Status": "Enabled",
+                    "Filter": {"Prefix": "logs/"},
+                    "NoncurrentVersionExpiration": {"NoncurrentDays": 30},
+                },
+            ]
+        },
+    )
+    return "created"
+
+
 # ── Lambda packaging ──────────────────────────────────────────────────────────
 
 def build_and_upload(bucket: str, region: str, boto3) -> None:
@@ -360,10 +442,24 @@ def main() -> None:
     build_and_upload(deploy_bucket, region, boto3)
     print(f"\n  Lambda code uploaded to s3://{deploy_bucket}/{LAMBDA_S3_KEY}")
 
-    # ── Step 3: Deploy the full stack ─────────────────────────────────────────
+    # ── Step 3: Prepare the log bucket ────────────────────────────────────────
 
     print("\n" + "=" * 60)
-    print("  Step 3 — Deploying CloudFormation stack")
+    print("  Step 3 — Preparing log bucket")
+    print("=" * 60 + "\n")
+
+    log_status = ensure_log_bucket(boto3, log_bucket, region)
+    if log_status == "created":
+        print(f"  Created log bucket: {log_bucket}")
+        print(f"  Applied: encryption, versioning, lifecycle (90d -> Glacier, 7y expire)")
+    else:
+        print(f"  Log bucket already exists, using as-is: {log_bucket}")
+        print(f"  (Existing settings preserved - no lifecycle rules applied)")
+
+    # ── Step 4: Deploy the full stack ─────────────────────────────────────────
+
+    print("\n" + "=" * 60)
+    print("  Step 4 — Deploying CloudFormation stack")
     print("=" * 60 + "\n")
 
     stack_params = {
