@@ -13,12 +13,14 @@ _BACKOFF_BASE = 2  # seconds
 class AIGuardClient:
     def __init__(self, api_key: str, endpoint: str, app_name: str) -> None:
         self.endpoint = endpoint
+        # Only the three headers documented as required by applyGuardrails.
+        # TMV1-Request-Type and Prefer are intentionally NOT sent: they show
+        # up as user-supplied slots in Trend's sample code, and the server
+        # rejects unknown values (e.g. "SimpleRequestGuard").
         self._headers = {
             "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json;charset=utf-8",
             "TMV1-Application-Name": app_name,
-            "TMV1-Request-Type": "SimpleRequestGuard",
-            "Prefer": "return=representation",
-            "Content-Type": "application/json",
         }
 
     def scan(self, text: str) -> dict:
@@ -45,6 +47,15 @@ class AIGuardClient:
                     )
                     time.sleep(wait)
                     continue
+                if not resp.ok:
+                    # Surface the server's error message so we can see exactly
+                    # what was rejected (missing header, bad body field, etc).
+                    body_preview = (resp.text or "")[:1500]
+                    logger.error(
+                        "AI Guard returned %s: %s",
+                        resp.status_code,
+                        body_preview,
+                    )
                 resp.raise_for_status()
                 return resp.json()
             except requests.RequestException as exc:
