@@ -2,18 +2,28 @@
 """
 Interactive setup for AI Guard S3 Monitor.
 
-Queries your AWS account for real S3 buckets, lets you pick the one to monitor,
-collects the remaining parameters, and writes samconfig.toml ready to deploy.
+- Lists your real S3 buckets so you can pick the one to monitor
+- Packages and uploads the Lambda code to S3
+- Collects all other parameters
+- Writes cfn-deploy.sh (ready to run) and cfn-parameters.json
 
 Usage:
-    python configure.py
+    python3 configure.py
 """
 
+import getpass
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import zipfile
+from datetime import datetime
 from pathlib import Path
 
-SAMCONFIG_PATH = Path(__file__).parent / "samconfig.toml"
+DEPLOY_SCRIPT = Path(__file__).parent / "cfn-deploy.sh"
+PARAMS_FILE   = Path(__file__).parent / "cfn-parameters.json"
+SRC_DIR       = Path(__file__).parent / "src"
 
 ENDPOINT_OPTIONS = {
     "1": ("US (default)", "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
@@ -23,23 +33,40 @@ ENDPOINT_OPTIONS = {
     "5": ("SG",           "https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan"),
 }
 
-EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+EMAIL_RE   = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$")
+BUCKET_RE  = re.compile(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def ask(prompt: str, default: str = "", validator=None) -> str:
+def ask(prompt: str, default: str = "", validator=None, secret: bool = False) -> str:
     hint = f" [{default}]" if default else ""
     while True:
-        raw = input(f"{prompt}{hint}: ").strip()
+        if secret:
+            raw = getpass.getpass(f"  {prompt}: ").strip()
+        else:
+            raw = input(f"{prompt}{hint}: ").strip()
         value = raw or default
         if not value:
-            print("  ✗ Required — please enter a value.")
+            print("  Required — please enter a value.")
             continue
         if validator:
             err = validator(value)
             if err:
-                print(f"  ✗ {err}")
+                print(f"  {err}")
+                continue
+        return value
+
+
+def ask_optional(prompt: str, default: str = "", validator=None) -> str:
+    hint = f" [{default}]" if default else " [leave blank to skip]"
+    while True:
+        raw = input(f"{prompt}{hint}: ").strip()
+        value = raw or default
+        if value and validator:
+            err = validator(value)
+            if err:
+                print(f"  {err}")
                 continue
         return value
 
@@ -53,7 +80,7 @@ def ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
                 return v
         except ValueError:
             pass
-        print(f"  ✗ Enter a number between {lo} and {hi}.")
+        print(f"  Enter a number between {lo} and {hi}.")
 
 
 def ask_yn(prompt: str, default: bool = False) -> bool:
@@ -66,7 +93,7 @@ def ask_yn(prompt: str, default: bool = False) -> bool:
             return True
         if raw in ("n", "no"):
             return False
-        print("  ✗ Please type y or n.")
+        print("  Please type y or n.")
 
 
 def pick_from_list(prompt: str, items: list[str]) -> str:
@@ -80,30 +107,121 @@ def pick_from_list(prompt: str, items: list[str]) -> str:
                 return items[idx - 1]
         except ValueError:
             pass
-        print(f"  ✗ Enter a number between 1 and {len(items)}.")
+        print(f"  Enter a number between 1 and {len(items)}.")
 
 
-def validate_email(v: str):
+def header(text: str) -> None:
+    print(f"\n{'─' * 60}")
+    print(f"  {text}")
+    print(f"{'─' * 60}")
+
+
+def val_email(v: str):
     if not EMAIL_RE.match(v):
         return "Not a valid email address."
 
 
-def validate_bucket_name(v: str):
-    if not re.match(r"^[a-z0-9][a-z0-9.\-]{1,61}[a-z0-9]$", v):
-        return ("Bucket names must be 3–63 chars, lowercase letters, numbers, "
-                "hyphens, and dots only.")
+def val_bucket(v: str):
+    if not BUCKET_RE.match(v):
+        return "3-63 chars, lowercase letters/numbers/hyphens/dots, start and end with letter or number."
 
 
-def validate_app_name(v: str):
+def val_app_name(v: str):
     if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", v):
-        return "Only letters, numbers, hyphens, and underscores (max 64 chars)."
+        return "Letters, numbers, hyphens, underscores only (max 64 chars)."
 
 
-def header(text: str) -> None:
-    width = 60
-    print(f"\n{'─' * width}")
-    print(f"  {text}")
-    print(f"{'─' * width}")
+# ── Lambda packaging ──────────────────────────────────────────────────────────
+
+def build_and_upload(staging_bucket: str, region: str, boto3) -> str:
+    """Package src/ + dependencies, upload to S3, return the S3 key."""
+    key = f"ai-guard-monitor/lambda-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
+
+    with tempfile.TemporaryDirectory() as build_dir:
+        print("\n  Installing Python dependencies...")
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install",
+             "-r", str(SRC_DIR / "requirements.txt"),
+             "-t", build_dir, "-q"],
+            check=True,
+        )
+
+        print("  Copying Lambda source files...")
+        for py_file in SRC_DIR.glob("*.py"):
+            shutil.copy(py_file, build_dir)
+
+        print("  Creating deployment zip...")
+        zip_path = Path(tempfile.mktemp(suffix=".zip"))
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file in Path(build_dir).rglob("*"):
+                if file.is_file():
+                    zf.write(file, file.relative_to(build_dir))
+
+        print(f"  Uploading to s3://{staging_bucket}/{key} ...")
+        s3 = boto3.client("s3", region_name=region)
+        s3.upload_file(str(zip_path), staging_bucket, key)
+        zip_path.unlink(missing_ok=True)
+
+    return key
+
+
+# ── output files ──────────────────────────────────────────────────────────────
+
+def write_deploy_script(params: dict) -> None:
+    overrides = " \\\n    ".join(
+        f'{k}="{v}"' for k, v in params.items()
+    )
+    script = f"""\
+#!/usr/bin/env bash
+# Generated by configure.py — do not commit (contains your API key)
+# Usage: ./cfn-deploy.sh
+set -euo pipefail
+
+aws cloudformation deploy \\
+  --template-file template.yaml \\
+  --stack-name ai-guard-monitor \\
+  --region "{params['region']}" \\
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \\
+  --parameter-overrides \\
+    {overrides}
+
+echo ""
+echo "Stack deployed. Check the Outputs tab in CloudFormation for next steps."
+"""
+    # Remove the internal 'region' key from parameter overrides
+    region = params.pop("region")
+    overrides = " \\\n    ".join(f'{k}="{v}"' for k, v in params.items())
+    params["region"] = region  # restore
+
+    script = f"""\
+#!/usr/bin/env bash
+# Generated by configure.py — do not commit (contains your API key)
+# Usage: ./cfn-deploy.sh
+set -euo pipefail
+
+aws cloudformation deploy \\
+  --template-file template.yaml \\
+  --stack-name ai-guard-monitor \\
+  --region "{region}" \\
+  --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \\
+  --parameter-overrides \\
+    {overrides}
+
+echo ""
+echo "Stack deployed. Check the Outputs tab in CloudFormation for next steps."
+"""
+    DEPLOY_SCRIPT.write_text(script)
+    DEPLOY_SCRIPT.chmod(0o755)
+
+
+def write_params_json(params: dict) -> None:
+    import json
+    entries = [
+        {"ParameterKey": k, "ParameterValue": str(v)}
+        for k, v in params.items()
+        if k != "region"
+    ]
+    PARAMS_FILE.write_text(json.dumps(entries, indent=2))
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -112,8 +230,8 @@ def main() -> None:
     print("\n╔══════════════════════════════════════════════════════════╗")
     print("║      AI Guard S3 Monitor — Interactive Setup             ║")
     print("╚══════════════════════════════════════════════════════════╝")
-    print("\nThis script will query your AWS account, let you pick the")
-    print("S3 bucket to monitor, and generate samconfig.toml.\n")
+    print("\nAnswers are used to build the Lambda package, upload it to S3,")
+    print("and generate cfn-deploy.sh ready to run.\n")
 
     try:
         import boto3
@@ -123,175 +241,172 @@ def main() -> None:
         sys.exit(1)
 
     # ── Region ────────────────────────────────────────────────────────────────
-    header("1 / 6  —  AWS Region")
+    header("1 / 7  —  AWS Region")
     session = boto3.session.Session()
     default_region = session.region_name or "us-east-1"
     region = ask("AWS region", default=default_region)
 
-    # ── Source bucket ─────────────────────────────────────────────────────────
-    header("2 / 6  —  Source S3 Bucket  (existing, to monitor)")
-
     s3 = boto3.client("s3", region_name=region)
-    print(f"\nQuerying S3 buckets in {region} …")
 
+    # ── Staging bucket (Lambda code) ──────────────────────────────────────────
+    header("2 / 7  —  Staging Bucket  (for Lambda deployment zip)")
+    print("\nThe Lambda code needs to be uploaded to S3 before CloudFormation")
+    print("can deploy it. Use any existing bucket you own in this region.")
+    print("This is NOT the bucket being monitored — it is just for deployment.\n")
+
+    print("Fetching your S3 buckets in this region...")
     try:
         all_buckets = [b["Name"] for b in s3.list_buckets().get("Buckets", [])]
     except (BotoCoreError, ClientError) as exc:
         print(f"\nError listing buckets: {exc}")
-        print("Make sure your AWS credentials are configured and have s3:ListAllMyBuckets.")
         sys.exit(1)
 
-    # Filter to the target region
     regional = []
-    skipped = 0
     for name in all_buckets:
         try:
             loc = s3.get_bucket_location(Bucket=name)
-            bucket_region = loc["LocationConstraint"] or "us-east-1"
-            if bucket_region == region:
+            if (loc["LocationConstraint"] or "us-east-1") == region:
                 regional.append(name)
         except (BotoCoreError, ClientError):
-            skipped += 1
+            pass
 
-    if not regional:
-        print(f"\n  No S3 buckets found in {region}.")
-        if skipped:
-            print(f"  ({skipped} bucket(s) could not be queried — check your permissions.)")
-        print("\n  Create a source bucket first, then re-run this script.")
-        sys.exit(1)
+    if regional:
+        print(f"\nFound {len(regional)} bucket(s) in {region}:\n")
+        staging_bucket = pick_from_list("Select staging bucket [number]", regional)
+    else:
+        print(f"\n  No buckets found in {region}.")
+        staging_bucket = ask("Enter staging bucket name manually", validator=val_bucket)
 
-    print(f"\nFound {len(regional)} bucket(s) in {region}:\n")
-    source_bucket = pick_from_list("Select bucket to monitor [number]", regional)
-    print(f"\n  ✓ Source bucket: {source_bucket}")
+    print(f"\n  Staging bucket: {staging_bucket}")
+
+    # Build and upload Lambda package
+    print()
+    if ask_yn("Build and upload Lambda package now?", default=True):
+        try:
+            lambda_key = build_and_upload(staging_bucket, region, boto3)
+            print(f"\n  Lambda uploaded: s3://{staging_bucket}/{lambda_key}")
+        except Exception as exc:
+            print(f"\n  Build failed: {exc}")
+            print("  Fix the error and re-run, or run ./build.sh manually.")
+            sys.exit(1)
+    else:
+        print("\n  Run './build.sh <bucket> [region]' to build and upload the package.")
+        lambda_key = ask("Enter LambdaCodeS3Key after running build.sh",
+                         default="ai-guard-monitor/lambda-YYYYMMDD-HHMMSS.zip")
+
+    # ── Source bucket ─────────────────────────────────────────────────────────
+    header("3 / 7  —  Source Bucket  (existing bucket to monitor)")
+    print(f"\nFetching S3 buckets in {region}...\n")
+
+    # Re-use the regional list, excluding the staging bucket
+    monitor_candidates = [b for b in regional if b != staging_bucket]
+
+    if monitor_candidates:
+        source_bucket = pick_from_list("Select bucket to monitor [number]", monitor_candidates)
+    else:
+        source_bucket = ask("Enter source bucket name", validator=val_bucket)
+
+    print(f"\n  Source bucket: {source_bucket}")
 
     # ── Log bucket ────────────────────────────────────────────────────────────
-    header("3 / 6  —  Log S3 Bucket  (new, will be created)")
-    print("\nThis bucket will be created by the stack to store detection logs.")
-    print("The name must be globally unique across all AWS accounts.\n")
-
+    header("4 / 7  —  Log Bucket  (new, will be created by the stack)")
+    print()
     default_log = f"{source_bucket}-ai-guard-logs"
-    log_bucket = ask("Log bucket name", default=default_log,
-                     validator=validate_bucket_name)
-
-    # Warn if it already exists in this account
-    try:
-        s3.head_bucket(Bucket=log_bucket)
-        print(f"\n  ⚠  Bucket '{log_bucket}' already exists in your account.")
-        print("  The stack will adopt it if it has no conflicting configuration.")
-    except ClientError as exc:
-        code = exc.response["Error"]["Code"]
-        if code in ("404", "NoSuchBucket"):
-            print(f"\n  ✓ '{log_bucket}' is available.")
-        elif code == "403":
-            print(f"\n  ⚠  '{log_bucket}' exists but belongs to another account — choose a different name.")
+    log_bucket = ask("Log bucket name", default=default_log, validator=val_bucket)
 
     # ── AI Guard ──────────────────────────────────────────────────────────────
-    header("4 / 6  —  Trend Micro AI Guard")
+    header("5 / 7  —  Trend Micro AI Guard")
+    print("\nCreate an API key at: Vision One Console -> Administration -> API Keys\n")
+    api_key = ask("Vision One API Key", secret=True,
+                  validator=lambda v: "Key seems too short." if len(v) < 10 else None)
 
-    print("\nAPI Key")
-    print("  Create one at: Vision One Console → Administration → API Keys")
-    print("  (input is hidden)\n")
-    import getpass
-    api_key = ""
-    while not api_key or len(api_key) < 10:
-        api_key = getpass.getpass("  Vision One API Key: ").strip()
-        if len(api_key) < 10:
-            print("  ✗ Key seems too short — please paste the full key.")
-
-    print("\nVision One Region / Endpoint")
+    print("\nVision One region endpoint:")
     for k, (label, _) in ENDPOINT_OPTIONS.items():
         print(f"  {k}.  {label}")
-    endpoint_choice = ask("\nSelect endpoint", default="1",
-                          validator=lambda v: None if v in ENDPOINT_OPTIONS else
-                          f"Enter a number 1–{len(ENDPOINT_OPTIONS)}.")
-    endpoint_label, endpoint_url = ENDPOINT_OPTIONS[endpoint_choice]
-    print(f"\n  ✓ Endpoint: {endpoint_label}  ({endpoint_url})")
+    ep_choice = ask("\nSelect endpoint", default="1",
+                    validator=lambda v: None if v in ENDPOINT_OPTIONS
+                    else f"Enter 1-{len(ENDPOINT_OPTIONS)}.")
+    ep_label, endpoint_url = ENDPOINT_OPTIONS[ep_choice]
+    print(f"\n  Endpoint: {ep_label}")
 
-    app_name = ask("\nApplication name  (TMV1-Application-Name header)",
-                   default="ai-guard-s3-monitor", validator=validate_app_name)
+    app_name = ask("\nApplication name", default="ai-guard-s3-monitor",
+                   validator=val_app_name)
 
     # ── Notifications ─────────────────────────────────────────────────────────
-    header("5 / 6  —  Email Notifications  (Amazon SES)")
-    print()
-    notification_email = ask("Alert recipient email", default="af.us@outlook.com",
-                              validator=validate_email)
-    ses_sender = ask("SES verified sender email  (FROM address)",
-                     validator=validate_email)
-    print("\n  ℹ  After deployment, verify the sender address with:")
-    print(f"     aws ses verify-email-identity --email-address {ses_sender} --region {region}")
+    header("6 / 7  —  Email Notifications  (optional)")
+    print("\nLeave both fields blank to skip email alerts.")
+    print("Detections are always logged to S3 regardless.\n")
+    notification_email = ask_optional("Alert recipient email", validator=val_email)
+    ses_sender = ""
+    if notification_email:
+        ses_sender = ask_optional("SES verified sender email  (FROM address)",
+                                  default=notification_email, validator=val_email)
+        print(f"\n  After deployment, verify the sender:")
+        print(f"  aws ses verify-email-identity --email-address {ses_sender} --region {region}")
 
-    # ── Scanner tuning ────────────────────────────────────────────────────────
-    header("6 / 6  —  Scanner Settings  (press Enter to accept defaults)")
+    # ── Scanner settings ──────────────────────────────────────────────────────
+    header("7 / 7  —  Scanner Settings  (Enter to accept defaults)")
     print()
-    max_text_kb     = ask_int("Max text to scan per file (KB, 10–2048)", 500, 10, 2048)
-    lambda_memory   = ask_int("Lambda memory MB  [256/512/1024/2048]",   512, 256, 2048)
-    lambda_timeout  = ask_int("Lambda timeout seconds  (30–900)",        300, 30, 900)
-    log_retention   = ask_int("CloudWatch log retention days  [7/14/30/60/90/180/365]", 90, 7, 365)
-
+    max_text_kb    = ask_int("Max text per file (KB, 10-2048)", 500, 10, 2048)
+    lambda_memory  = ask_int("Lambda memory MB  [256/512/1024/2048]", 512, 256, 2048)
+    lambda_timeout = ask_int("Lambda timeout seconds  (30-900)", 300, 30, 900)
+    log_retention  = ask_int("CloudWatch log retention days", 90, 7, 365)
     print()
     enable_cw = ask_yn("Enable CloudWatch Dashboard + Alarms?", default=False)
 
-    # ── Write samconfig.toml ──────────────────────────────────────────────────
+    # ── Summary & write ───────────────────────────────────────────────────────
     header("Summary")
     rows = [
-        ("Region",               region),
-        ("Source bucket",        source_bucket),
-        ("Log bucket",           log_bucket),
-        ("AI Guard endpoint",    endpoint_label),
-        ("App name",             app_name),
-        ("Alert recipient",      notification_email),
-        ("SES sender",           ses_sender),
-        ("Max text",             f"{max_text_kb} KB"),
-        ("Lambda memory",        f"{lambda_memory} MB"),
-        ("Lambda timeout",       f"{lambda_timeout}s"),
-        ("Log retention",        f"{log_retention} days"),
+        ("Region",                 region),
+        ("Staging bucket",         staging_bucket),
+        ("Lambda key",             lambda_key),
+        ("Source bucket",          source_bucket),
+        ("Log bucket",             log_bucket),
+        ("AI Guard endpoint",      ep_label),
+        ("App name",               app_name),
+        ("Alert recipient",        notification_email or "(disabled)"),
+        ("SES sender",             ses_sender or "(disabled)"),
+        ("Max text",               f"{max_text_kb} KB"),
+        ("Lambda memory",          f"{lambda_memory} MB"),
+        ("Lambda timeout",         f"{lambda_timeout}s"),
+        ("Log retention",          f"{log_retention} days"),
         ("CloudWatch monitoring",  "Yes" if enable_cw else "No"),
     ]
     for label, value in rows:
         print(f"  {label:<26} {value}")
 
     print()
-    if not ask_yn("Write samconfig.toml and proceed?", default=True):
-        print("\nAborted — nothing written.")
+    if not ask_yn("Write cfn-deploy.sh and cfn-parameters.json?", default=True):
+        print("\nAborted.")
         sys.exit(0)
 
-    samconfig = f"""\
-# Generated by configure.py — do not commit this file (it contains your API key)
-version = 0.1
+    params = {
+        "region":                    region,
+        "LambdaCodeS3Bucket":        staging_bucket,
+        "LambdaCodeS3Key":           lambda_key,
+        "AIGuardApiKey":             api_key,
+        "AIGuardEndpoint":           endpoint_url,
+        "AIGuardAppName":            app_name,
+        "SourceBucketName":          source_bucket,
+        "LogBucketName":             log_bucket,
+        "NotificationEmail":         notification_email,
+        "SESVerifiedSender":         ses_sender,
+        "MaxTextKB":                 str(max_text_kb),
+        "LambdaMemoryMB":            str(lambda_memory),
+        "LambdaTimeoutSeconds":      str(lambda_timeout),
+        "LogRetentionDays":          str(log_retention),
+        "EnableCloudWatchMonitoring": "Yes" if enable_cw else "No",
+    }
 
-[default.build.parameters]
-cached   = true
-parallel = true
+    write_deploy_script(params)
+    write_params_json(params)
 
-[default.deploy.parameters]
-stack_name        = "ai-guard-monitor"
-region            = "{region}"
-confirm_changeset = true
-capabilities      = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-resolve_s3        = true
-
-parameter_overrides = [
-  "AIGuardApiKey={api_key}",
-  "AIGuardEndpoint={endpoint_url}",
-  "AIGuardAppName={app_name}",
-  "SourceBucketName={source_bucket}",
-  "LogBucketName={log_bucket}",
-  "NotificationEmail={notification_email}",
-  "SESVerifiedSender={ses_sender}",
-  "MaxTextKB={max_text_kb}",
-  "LambdaMemoryMB={lambda_memory}",
-  "LambdaTimeoutSeconds={lambda_timeout}",
-  "LogRetentionDays={log_retention}",
-  "EnableCloudWatchMonitoring={'Yes' if enable_cw else 'No'}",
-]
-"""
-
-    SAMCONFIG_PATH.write_text(samconfig)
-    print(f"\n  ✓ Written to {SAMCONFIG_PATH.name}")
+    print(f"\n  cfn-deploy.sh      — run this to deploy the stack")
+    print(f"  cfn-parameters.json — parameters for Console or create-stack")
     print("\nNext steps:")
-    print("  1.  sam build --use-container")
-    print("  2.  sam deploy")
-    print(f"  3.  aws ses verify-email-identity --email-address {ses_sender} --region {region}")
+    print("  ./cfn-deploy.sh")
+    if notification_email and ses_sender:
+        print(f"  aws ses verify-email-identity --email-address {ses_sender} --region {region}")
     print()
 
 

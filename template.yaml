@@ -1,5 +1,4 @@
 AWSTemplateFormatVersion: "2010-09-09"
-Transform: AWS::Serverless-2016-10-31
 
 Description: >
   AI Guard S3 Document Monitor
@@ -13,6 +12,11 @@ Description: >
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
+      - Label:
+          default: "0 - Lambda Deployment Package"
+        Parameters:
+          - LambdaCodeS3Bucket
+          - LambdaCodeS3Key
       - Label:
           default: "1 - Trend Micro AI Guard"
         Parameters:
@@ -41,6 +45,8 @@ Metadata:
         Parameters:
           - EnableCloudWatchMonitoring
     ParameterLabels:
+      LambdaCodeS3Bucket:       { default: "Lambda Code - S3 Bucket" }
+      LambdaCodeS3Key:          { default: "Lambda Code - S3 Key (zip path)" }
       AIGuardApiKey:            { default: "Vision One API Key" }
       AIGuardEndpoint:          { default: "AI Guard Endpoint  (choose your region)" }
       AIGuardAppName:           { default: "Application Name  (TMV1-Application-Name header)" }
@@ -58,6 +64,26 @@ Metadata:
 # Parameters
 # ──────────────────────────────────────────────────────────────────────────────
 Parameters:
+
+  # ── Lambda Deployment Package ────────────────────────────────────────────────
+  # Run ./build.sh <bucket> [region] first — it prints these two values.
+
+  LambdaCodeS3Bucket:
+    Type: String
+    AllowedPattern: "[a-z0-9][a-z0-9.\\-]{1,61}[a-z0-9]"
+    ConstraintDescription: "Lowercase letters, numbers, hyphens, dots. Example: my-deploy-bucket"
+    Description: >
+      S3 bucket that holds the Lambda deployment zip.
+      Run ./build.sh first — it uploads the zip and prints this value.
+      The bucket must be in the same region as this stack.
+      Example: my-deploy-bucket
+
+  LambdaCodeS3Key:
+    Type: String
+    Description: >
+      S3 key (path) of the Lambda zip file inside the bucket above.
+      Run ./build.sh first — it prints this value after uploading.
+      Example: ai-guard-monitor/lambda-20240101-120000.zip
 
   # ── AI Guard ────────────────────────────────────────────────────────────────
 
@@ -251,7 +277,6 @@ Resources:
                 Effect: Allow
                 Action:
                   - s3:GetObject
-                  - s3:HeadObject
                 Resource: !Sub "arn:aws:s3:::${SourceBucketName}/*"
               - Sid: WriteLogBucket
                 Effect: Allow
@@ -268,13 +293,15 @@ Resources:
   # ── 3. Scanner Lambda ─────────────────────────────────────────────────────
 
   ScannerFunction:
-    Type: AWS::Serverless::Function
+    Type: AWS::Lambda::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-scanner"
-      CodeUri: src/
+      Code:
+        S3Bucket: !Ref LambdaCodeS3Bucket
+        S3Key:    !Ref LambdaCodeS3Key
       Handler: handler.lambda_handler
       Runtime: python3.12
-      Architectures: [arm64]
+      Architectures: [x86_64]
       MemorySize: !Ref LambdaMemoryMB
       Timeout: !Ref LambdaTimeoutSeconds
       Role: !GetAtt ScannerRole.Arn

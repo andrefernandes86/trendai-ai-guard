@@ -1,28 +1,25 @@
-.PHONY: build deploy deploy-guided destroy test lint clean validate configure
+.PHONY: configure build deploy destroy test lint clean validate
 
-## Interactive setup: select source bucket and generate samconfig.toml
+## Interactive setup: pick S3 bucket, build Lambda, generate cfn-deploy.sh
 configure:
 	python3 configure.py
 
-## Build Lambda package (requires Docker for --use-container)
+## Package Lambda code and upload to S3 (requires BUCKET variable)
+## Usage: make build BUCKET=my-deploy-bucket REGION=us-east-1
 build:
-	sam build --use-container
+	./build.sh $(BUCKET) $(REGION)
 
-## First-time interactive deploy
-deploy-guided: build
-	sam deploy --guided
-
-## Deploy using samconfig.toml
-deploy: build
-	sam deploy
-
-## Validate the CloudFormation template (no AWS credentials needed)
-validate:
-	sam validate --lint
+## Deploy the stack using generated cfn-deploy.sh
+deploy:
+	./cfn-deploy.sh
 
 ## Tear down the stack (log bucket is retained by DeletionPolicy: Retain)
 destroy:
-	sam delete
+	aws cloudformation delete-stack --stack-name ai-guard-monitor --region $(REGION)
+
+## Validate the CloudFormation template
+validate:
+	cfn-lint template.yaml --include-checks W
 
 ## Run the test suite (no live AWS or TM credentials needed)
 test:
@@ -31,14 +28,8 @@ test:
 
 ## Lint Python source
 lint:
-	ruff check src/ tests/
-
-## Local invocation with the sample S3 event (requires .env.json)
-local-invoke:
-	sam local invoke AIGuardFunction \
-		--event events/sample_s3_event.json \
-		--env-vars .env.json
+	ruff check src/ tests/ configure.py
 
 ## Remove build artefacts
 clean:
-	rm -rf .aws-sam/
+	rm -rf .aws-sam/ __pycache__ src/__pycache__

@@ -1,6 +1,8 @@
 # Secrets — never commit
 .env
 samconfig.toml
+cfn-deploy.sh
+cfn-parameters.json
 *.pem
 *.key
 
