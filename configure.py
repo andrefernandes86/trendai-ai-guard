@@ -414,7 +414,7 @@ def main() -> None:
                  validator=lambda v: None if v in ENDPOINT_OPTIONS
                  else f"Enter 1-{len(ENDPOINT_OPTIONS)}.")
     ep_label, endpoint_url = ENDPOINT_OPTIONS[ep_key]
-    print("\n  Note: each scan is tagged with '<bucket>/<file>' automatically.")
+    print("\n  Note: each scan is tagged as '<bucket>--<file>' automatically.")
     print("  This 'Application name' is only used as a fallback identifier.")
     app_name = ask("Fallback application name", default="ai-guard-s3-monitor",
                    validator=lambda v: None if re.match(r"^[a-zA-Z0-9_-]{1,64}$", v)

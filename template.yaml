@@ -96,9 +96,9 @@ Parameters:
     ConstraintDescription: "Letters, numbers, hyphens, and underscores only."
     Description: >
       Fallback value for the TMV1-Application-Name header. Each scan is
-      normally tagged with the source bucket and file name (e.g.
-      'my-bucket_report_pdf'); this value is only used if that
-      auto-derived name sanitizes to empty.
+      normally tagged with the source bucket and file name separated
+      by '--' (e.g. 'my-bucket--report_pdf'); this value is only used
+      if that auto-derived name sanitizes to empty.
 
   # ── Storage ─────────────────────────────────────────────────────────────────
 

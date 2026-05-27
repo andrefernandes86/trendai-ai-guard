@@ -276,7 +276,7 @@ case "$EP_CHOICE" in
 esac
 
 say ""
-say "  Note: each scan is tagged with '<bucket>/<file>' automatically."
+say "  Note: each scan is tagged as '<bucket>--<file>' automatically."
 say "  This 'Application name' is only used as a fallback identifier."
 APP_NAME=$(ask "Fallback application name" "ai-guard-s3-monitor")
 
