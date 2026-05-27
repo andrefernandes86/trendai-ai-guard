@@ -23,7 +23,6 @@ Metadata:
         Parameters:
           - SourceBucketName
           - LogBucketName
-          - LambdaDeployBucketName
       - Label:
           default: "3 - Email Notifications (Amazon SES) - optional"
         Parameters:
@@ -41,7 +40,6 @@ Metadata:
         Parameters:
           - EnableCloudWatchMonitoring
     ParameterLabels:
-      LambdaDeployBucketName:   { default: "Lambda Deployment Bucket (auto-created by configure.py)" }
       AIGuardApiKey:            { default: "Vision One API Key" }
       AIGuardEndpoint:          { default: "AI Guard Endpoint  (choose your region)" }
       AIGuardAppName:           { default: "Application Name  (TMV1-Application-Name header)" }
@@ -96,17 +94,6 @@ Parameters:
       Appears in Vision One audit logs so you can trace activity back to this stack.
 
   # ── Storage ─────────────────────────────────────────────────────────────────
-
-  LambdaDeployBucketName:
-    Type: String
-    AllowedPattern: "[a-z0-9][a-z0-9.\\-]{1,61}[a-z0-9]"
-    ConstraintDescription: >
-      3-63 characters. Lowercase letters, numbers, hyphens, and dots only.
-    Description: >
-      Name of the S3 bucket that stores the Lambda deployment package.
-      Created automatically by configure.py — do not set this manually.
-      For manual deployments: create the bucket first, run build.sh to
-      upload the code, then provide this bucket name.
 
   SourceBucketName:
     Type: String
@@ -193,9 +180,9 @@ Parameters:
     Default: "No"
     AllowedValues: ["Yes", "No"]
     Description: >
-      Yes — creates a CloudWatch Dashboard (invocations, errors, duration, detections)
+      Yes - creates a CloudWatch Dashboard (invocations, errors, duration, detections)
       and two alarms: one for Lambda errors, one for blocked detections.
-      No — Lambda logs still go to CloudWatch Logs; no extra resources are created.
+      No - Lambda logs still go to CloudWatch Logs; no extra resources are created.
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Conditions
@@ -283,7 +270,9 @@ Resources:
     Properties:
       FunctionName: !Sub "${AWS::StackName}-scanner"
       Code:
-        S3Bucket: !Ref LambdaDeployBucketName
+        # Bucket name is derived from stack name + account id. configure.py
+        # creates this bucket and uploads the code before the stack deploys.
+        S3Bucket: !Sub "${AWS::StackName}-deploy-${AWS::AccountId}"
         S3Key:    lambda/package.zip
       Handler: handler.lambda_handler
       Runtime: python3.12
@@ -540,7 +529,7 @@ Outputs:
 
   LambdaDeployBucketName:
     Description: "S3 bucket containing the Lambda deployment package (lambda/package.zip). Run 'make build' to upload a new version."
-    Value: !Ref LambdaDeployBucketName
+    Value: !Sub "${AWS::StackName}-deploy-${AWS::AccountId}"
 
   ScannerFunctionArn:
     Description: "Scanner Lambda ARN"

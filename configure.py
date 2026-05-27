@@ -312,10 +312,11 @@ def main() -> None:
     enable_cw = ask_yn("Enable CloudWatch Dashboard + Alarms?", default=False)
 
     # ── Derive deployment bucket name ─────────────────────────────────────────
+    # Must match the !Sub expression in template.yaml exactly:
+    #   "${AWS::StackName}-deploy-${AWS::AccountId}"
     print("\n  Resolving AWS account ID...")
     account_id = get_account_id(boto3, region)
-    # Use last 12 digits of account ID to keep the name short but unique
-    deploy_bucket = f"{STACK_NAME}-deploy-{account_id[-12:]}"
+    deploy_bucket = f"{STACK_NAME}-deploy-{account_id}"
 
     # ── Summary ───────────────────────────────────────────────────────────────
     header("Summary")
@@ -366,7 +367,6 @@ def main() -> None:
     print("=" * 60 + "\n")
 
     stack_params = {
-        "LambdaDeployBucketName":      deploy_bucket,
         "AIGuardApiKey":               api_key,
         "AIGuardEndpoint":             endpoint_url,
         "AIGuardAppName":              app_name,

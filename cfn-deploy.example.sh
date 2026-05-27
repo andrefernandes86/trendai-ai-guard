@@ -8,9 +8,9 @@
 #   3. Deploys this CloudFormation stack
 #
 # Manual path (advanced):
-#   1. Create an S3 bucket to hold the Lambda package
-#   2. Run ./build.sh --bucket <bucket-name> to upload the code
-#   3. Fill in LambdaDeployBucketName below and run this script
+#   The template expects the Lambda package at:
+#     s3://<stack-name>-deploy-<aws-account-id>/lambda/package.zip
+#   Create that bucket and upload src/ (zipped) to that key before running.
 
 set -euo pipefail
 
@@ -20,7 +20,6 @@ aws cloudformation deploy \
   --region "us-east-1" \
   --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
   --parameter-overrides \
-    LambdaDeployBucketName="my-ai-guard-deploy-bucket" \
     AIGuardApiKey="YOUR_VISION_ONE_API_KEY" \
     AIGuardEndpoint="https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan" \
     AIGuardAppName="ai-guard-s3-monitor" \
