@@ -1,0 +1,135 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  AI Guard S3 Document Monitor — scans uploaded documents via Trend Micro AI Guard
+  and alerts on malicious prompt injection or policy violations.
+
+Parameters:
+  AIGuardApiKey:
+    Type: String
+    NoEcho: true
+    Description: "Trend Micro Vision One API key (Bearer token for AI Guard)"
+
+  AIGuardEndpoint:
+    Type: String
+    Default: "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+    Description: "AI Guard API endpoint URL (region-specific if required)"
+
+  AIGuardAppName:
+    Type: String
+    Default: "ai-guard-s3-monitor"
+    MaxLength: 64
+    Description: "Identifier sent in the TMV1-Application-Name header (a-z, 0-9, hyphens, underscores)"
+
+  NotificationEmail:
+    Type: String
+    Default: "af.us@outlook.com"
+    Description: "Recipient email address for security alert notifications"
+
+  SesSenderEmail:
+    Type: String
+    Description: "Verified SES sender email address (must be verified in SES)"
+
+  SourceBucketName:
+    Type: String
+    Description: "Name of the S3 bucket to monitor for document uploads"
+
+  LogBucketName:
+    Type: String
+    Description: "Name of the secondary S3 bucket where detection logs are stored"
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [arm64]
+    MemorySize: 512
+    Timeout: 300
+    Environment:
+      Variables:
+        AI_GUARD_API_KEY: !Ref AIGuardApiKey
+        AI_GUARD_ENDPOINT: !Ref AIGuardEndpoint
+        AI_GUARD_APP_NAME: !Ref AIGuardAppName
+        LOG_BUCKET_NAME: !Ref LogBucketName
+        NOTIFICATION_EMAIL: !Ref NotificationEmail
+        SES_SENDER_EMAIL: !Ref SesSenderEmail
+
+Resources:
+  # ── S3 Buckets ───────────────────────────────────────────────────────────
+
+  SourceBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref SourceBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  LogBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref LogBucketName
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveAfter90Days
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER
+          - Id: ExpireAfter7Years
+            Status: Enabled
+            ExpirationInDays: 2555
+
+  # ── Lambda ────────────────────────────────────────────────────────────────
+
+  AIGuardFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-scanner"
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Description: "Scans S3 document uploads with Trend Micro AI Guard"
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref SourceBucketName
+        - S3CrudPolicy:
+            BucketName: !Ref LogBucketName
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+                - ses:SendRawEmail
+              Resource: "*"
+      Events:
+        DocumentUpload:
+          Type: S3
+          Properties:
+            Bucket: !Ref SourceBucket
+            Events: s3:ObjectCreated:*
+
+Outputs:
+  FunctionArn:
+    Description: "Lambda function ARN"
+    Value: !GetAtt AIGuardFunction.Arn
+
+  SourceBucketName:
+    Description: "Upload documents to this bucket to trigger scanning"
+    Value: !Ref SourceBucket
+
+  LogBucketName:
+    Description: "Detection logs are stored here under logs/YYYY/MM/DD/"
+    Value: !Ref LogBucket

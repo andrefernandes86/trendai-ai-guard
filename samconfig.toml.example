@@ -1,0 +1,25 @@
+# Copy this file to samconfig.toml and fill in the values.
+# samconfig.toml is excluded from git to protect secrets.
+
+version = 0.1
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.deploy.parameters]
+stack_name         = "ai-guard-monitor"
+region             = "us-east-1"
+confirm_changeset  = true
+capabilities       = "CAPABILITY_IAM"
+resolve_s3         = true
+
+parameter_overrides = [
+  "AIGuardApiKey=YOUR_TREND_MICRO_API_KEY_HERE",
+  "AIGuardEndpoint=https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan",
+  "AIGuardAppName=ai-guard-s3-monitor",
+  "NotificationEmail=af.us@outlook.com",
+  "SesSenderEmail=YOUR_VERIFIED_SES_EMAIL_HERE",
+  "SourceBucketName=YOUR_UNIQUE_SOURCE_BUCKET_NAME",
+  "LogBucketName=YOUR_UNIQUE_LOG_BUCKET_NAME",
+]

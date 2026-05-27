@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+samconfig.toml
+*.pem
+*.key
+
+# SAM / CloudFormation build output
+.aws-sam/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
