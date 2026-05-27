@@ -1,4 +1,8 @@
-.PHONY: build deploy deploy-guided destroy test lint clean validate
+.PHONY: build deploy deploy-guided destroy test lint clean validate configure
+
+## Interactive setup: select source bucket and generate samconfig.toml
+configure:
+	python3 configure.py
 
 ## Build Lambda package (requires Docker for --use-container)
 build:

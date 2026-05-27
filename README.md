@@ -55,15 +55,24 @@ All other extensions (`.zip`, `.png`, `.mp4`, …) are silently skipped.
 
 ## Deployment
 
-### Step 1 — Clone and configure
+### Step 1 — Clone and run the interactive setup
 
 ```bash
 git clone https://github.com/YOUR_USERNAME/ai-guard-aws.git
 cd ai-guard-aws
-cp samconfig.toml.example samconfig.toml
+pip install boto3          # only needed for the setup script
+make configure             # or: python3 configure.py
 ```
 
-Open `samconfig.toml` and fill in every placeholder (see comments in the file).
+The script connects to your AWS account, lists the S3 buckets in the selected
+region so you can pick the one to monitor, prompts for all other parameters,
+and writes `samconfig.toml` automatically. No manual file editing required.
+
+Alternatively you can copy and edit the example file manually:
+
+```bash
+cp samconfig.toml.example samconfig.toml
+```
 
 ### Step 2 — Verify your SES sender address
 
