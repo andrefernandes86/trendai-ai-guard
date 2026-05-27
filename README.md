@@ -166,7 +166,7 @@ alert, and a JSON file under `s3://<log-bucket>/logs/YYYY/MM/DD/`.
 | View stack outputs | `aws cloudformation describe-stacks --stack-name ai-guard-monitor --query 'Stacks[0].Outputs' --output table` |
 | List detection logs | `aws s3 ls s3://<log-bucket>/logs/ --recursive` |
 | Delete the stack only (keeps buckets) | `make destroy` |
-| **Fully uninstall everything** | see [Uninstalling the solution](#uninstalling-the-solution) below |
+| **Fully uninstall everything** | `./uninstall.sh` or `make uninstall` — see [Uninstalling the solution](#uninstalling-the-solution) below |
 
 ---
 
@@ -178,10 +178,31 @@ What the installer puts into your AWS account:
 |---|---|---|---|
 | 1 | CloudFormation stack `ai-guard-monitor` (Lambda, IAM roles, log groups, alarms, dashboard) | CloudFormation | `aws cloudformation delete-stack` |
 | 2 | S3 event-notification on your **source bucket** | The stack's custom resource | `aws cloudformation delete-stack` (the custom resource cleans itself up) |
-| 3 | Lambda deployment bucket `<stack-name>-deploy-<account-id>` | The installer, via boto3 | Manual |
-| 4 | Log bucket (only if it didn't exist before install) | The installer, via boto3 | Manual |
-| 5 | SES verified sender identity | You, via `aws ses verify-email-identity` | Manual |
-| 6 | Local helper files: `cfn-deploy.sh`, `cfn-parameters.json` | The installer | Manual |
+| 3 | Lambda deployment bucket `<stack-name>-deploy-<account-id>` | The installer, via boto3 | Manual / `uninstall.sh` |
+| 4 | Log bucket (only if it didn't exist before install) | The installer, via boto3 | Manual / `uninstall.sh` |
+| 5 | SES verified sender identity | You, via `aws ses verify-email-identity` | Manual / `uninstall.sh` |
+| 6 | Local helper files: `cfn-deploy.sh`, `cfn-parameters.json` | The installer | Manual / `uninstall.sh` |
+
+### Recommended: use the uninstaller
+
+```bash
+./uninstall.sh                  # uses defaults: ai-guard-monitor / us-east-1
+./uninstall.sh my-stack us-east-2
+# or:
+make uninstall
+```
+
+The uninstaller walks through all five steps with a separate
+confirmation for each one. The **log bucket** prompts twice (you have
+to type `y` to a "are you ABSOLUTELY sure?" check) because it contains
+your detection history. At the end it verifies that the stack, the
+deploy bucket, the source-bucket notification, and any CloudWatch log
+groups for the stack are gone.
+
+### Manual teardown (alternative)
+
+If you'd rather do it by hand (or are scripting it into something
+else), the same five steps:
 
 ### Step 1 — Delete the CloudFormation stack
 
@@ -412,9 +433,10 @@ make test
 .
 |-- template.yaml              # CloudFormation template (pure CFN, no SAM)
 |-- install.sh                 # One-shot bash installer (AWS CLI only)
+|-- uninstall.sh               # One-shot bash uninstaller (mirrors install.sh)
 |-- configure.py               # Equivalent Python installer (requires boto3)
 |-- build.sh                   # Build + upload + 'aws lambda update-function-code'
-|-- Makefile                   # install / configure / build / deploy / destroy / test / lint
+|-- Makefile                   # install / uninstall / configure / build / deploy / destroy / test / lint
 |-- src/                       # Lambda function source
 |   |-- handler.py
 |   |-- ai_guard_client.py

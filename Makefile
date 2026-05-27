@@ -1,8 +1,13 @@
-.PHONY: install configure build deploy destroy test lint clean validate
+.PHONY: install uninstall configure build deploy destroy test lint clean validate
 
 ## One-shot installer (bash + AWS CLI). Run this if you don't have boto3.
 install:
 	./install.sh
+
+## Full uninstaller - removes the stack, the deploy bucket, optionally
+## the log bucket / SES identity / local files. Interactive.
+uninstall:
+	./uninstall.sh
 
 ## Full guided setup using Python (same end result as 'install')
 configure:
