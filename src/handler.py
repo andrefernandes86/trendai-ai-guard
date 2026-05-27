@@ -73,9 +73,11 @@ def _process_file(bucket: str, key: str) -> None:
     # logs show where every scan came from. The '--' is a visual
     # separator that survives the [a-zA-Z0-9_-] / 64-char sanitization
     # the client applies (it only collapses underscores, not hyphens).
+    # Lowercased for a uniform look since S3 bucket names are always
+    # lowercase but file names can be mixed case.
     result = client.scan(
         text,
-        app_name=f"{bucket}--{os.path.basename(key)}",
+        app_name=f"{bucket}--{os.path.basename(key)}".lower(),
     )
     action = result.get("action", "").lower()
     logger.info("AI Guard action for %s: %s", key, action)
