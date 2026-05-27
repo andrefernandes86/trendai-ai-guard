@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 # Packages the Lambda function + dependencies and uploads the zip to the
-# deployment bucket that was created by the CloudFormation stack.
+# deployment bucket, then updates the Lambda function code in-place.
 #
 # Usage (after stack exists):
 #   ./build.sh <stack-name> [aws-region]
 #
 # Usage (bucket name known directly):
 #   ./build.sh --bucket <bucket-name> [aws-region]
-#
-# Output:
-#   Prints the LambdaCodeS3Key value to use when deploying/updating the stack.
 
 set -euo pipefail
 
@@ -47,7 +44,7 @@ if [[ -z "$BUCKET" ]]; then
   echo ">>> Deployment bucket: ${BUCKET}"
 fi
 
-KEY="ai-guard-monitor/lambda-$(date +%Y%m%d-%H%M%S).zip"
+KEY="lambda/package.zip"
 BUILD_DIR="$(mktemp -d)"
 ZIP_FILE="$(mktemp).zip"
 
@@ -66,17 +63,20 @@ echo ">>> Creating deployment zip..."
 echo ">>> Uploading to s3://${BUCKET}/${KEY} ..."
 aws s3 cp "$ZIP_FILE" "s3://${BUCKET}/${KEY}" --region "$REGION"
 
+# Update the Lambda function code directly (no CloudFormation parameter change needed)
+FUNCTION_NAME="${STACK_NAME:-ai-guard-monitor}-scanner"
+echo ">>> Updating Lambda function code: ${FUNCTION_NAME} ..."
+aws lambda update-function-code \
+  --function-name "$FUNCTION_NAME" \
+  --s3-bucket "$BUCKET" \
+  --s3-key "$KEY" \
+  --region "$REGION" \
+  --output text --query "CodeSize" | xargs -I{} echo "    Code size: {} bytes"
+
 echo ""
 echo "======================================================"
 echo "  Build complete."
 echo "======================================================"
-echo "  LambdaCodeS3Key : ${KEY}"
-echo ""
-echo "Update the stack with this key:"
-echo "  aws cloudformation update-stack \\"
-echo "    --stack-name ${STACK_NAME:-ai-guard-monitor} \\"
-echo "    --use-previous-template \\"
-echo "    --parameters ParameterKey=LambdaCodeS3Key,ParameterValue=${KEY} \\"
-echo "                 ParameterKey=<other-params>,UsePreviousValue=true \\"
-echo "    --region ${REGION}"
+echo "  Lambda function updated: ${FUNCTION_NAME}"
+echo "  Deployment bucket:       ${BUCKET}"
 echo ""
