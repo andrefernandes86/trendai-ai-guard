@@ -63,12 +63,16 @@ def _process_file(bucket: str, key: str) -> None:
         api_key=os.environ["AI_GUARD_API_KEY"],
         endpoint=os.environ.get(
             "AI_GUARD_ENDPOINT",
-            "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan",
+            "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails",
         ),
+        # Fallback name used only if the per-file sanitized name is empty.
         app_name=os.environ.get("AI_GUARD_APP_NAME", "ai-guard-s3-monitor"),
     )
 
-    result = client.scan(text)
+    # Tag each scan with the file name so it shows up that way in
+    # Vision One audit logs. The client sanitizes to satisfy
+    # TMV1-Application-Name's [a-zA-Z0-9_-] / 64-char constraint.
+    result = client.scan(text, app_name=os.path.basename(key))
     action = result.get("action", "").lower()
     logger.info("AI Guard action for %s: %s", key, action)
 
