@@ -104,7 +104,9 @@ check_prereqs() {
 # ── Bucket helpers (idempotent) ──────────────────────────────────────────────
 
 bucket_exists() {
-    aws s3api head-bucket --bucket "$1" --region "$2" 2>/dev/null
+    # Silence both stdout and stderr: newer AWS CLI versions emit a JSON
+    # response body on head-bucket success.
+    aws s3api head-bucket --bucket "$1" --region "$2" >/dev/null 2>&1
 }
 
 create_bucket() {
