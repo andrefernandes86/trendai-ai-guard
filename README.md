@@ -340,14 +340,14 @@ For example, uploading `Report-Q3.pdf` to bucket `demo-v1-fs-upload`
 sends a scan tagged as:
 
 ```
-TMV1-Application-Name: demo-v1-fs-upload--report-q3_pdf
+TMV1-Application-Name: demo-v1-fs-upload--Report-Q3_pdf
 ```
 
 The `--` between the bucket name and the file name is a visual
 separator (the header only permits `[a-zA-Z0-9_-]`, so this is the
-most readable divider that survives sanitization). The whole value is
-lowercased so the tag looks uniform regardless of how the file was
-named.
+most readable divider that survives sanitization). The original file
+name casing is preserved so the tag is easy to recognize in Vision
+One.
 
 The header is auto-sanitized to satisfy Trend's constraint
 (`[a-zA-Z0-9_-]`, max 64 chars). The `AIGuardAppName` parameter is now
