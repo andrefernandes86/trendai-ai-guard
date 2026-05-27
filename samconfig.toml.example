@@ -1,25 +1,69 @@
-# Copy this file to samconfig.toml and fill in the values.
-# samconfig.toml is excluded from git to protect secrets.
+# ─────────────────────────────────────────────────────────────────────────────
+# AI Guard S3 Monitor — SAM deployment configuration
+#
+# Copy this file to samconfig.toml and fill in every placeholder.
+# samconfig.toml is excluded from git (.gitignore) to protect secrets.
+# ─────────────────────────────────────────────────────────────────────────────
 
 version = 0.1
 
 [default.build.parameters]
-cached = true
+cached   = true
 parallel = true
 
 [default.deploy.parameters]
-stack_name         = "ai-guard-monitor"
-region             = "us-east-1"
-confirm_changeset  = true
-capabilities       = "CAPABILITY_IAM"
-resolve_s3         = true
+stack_name        = "ai-guard-monitor"
+region            = "us-east-1"           # Must match your S3 source bucket region
+confirm_changeset = true
+capabilities      = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+resolve_s3        = true                  # SAM creates a deployment bucket automatically
 
 parameter_overrides = [
-  "AIGuardApiKey=YOUR_TREND_MICRO_API_KEY_HERE",
+  # ── 1. Trend Micro AI Guard ─────────────────────────────────────────────
+  # Your Vision One API key (create at: Console → Administration → API Keys)
+  "AIGuardApiKey=YOUR_VISION_ONE_API_KEY_HERE",
+
+  # Select the endpoint for your Vision One region:
+  #   US: https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan  (default)
+  #   EU: https://api.eu.xdr.trendmicro.com/v3.0/xdr/guard/scan
+  #   AU: https://api.au.xdr.trendmicro.com/v3.0/xdr/guard/scan
+  #   JP: https://api.jp.xdr.trendmicro.com/v3.0/xdr/guard/scan
+  #   SG: https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan
   "AIGuardEndpoint=https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan",
+
+  # Name sent in the TMV1-Application-Name header (visible in Vision One audit logs)
   "AIGuardAppName=ai-guard-s3-monitor",
-  "NotificationEmail=af.us@outlook.com",
-  "SesSenderEmail=YOUR_VERIFIED_SES_EMAIL_HERE",
-  "SourceBucketName=YOUR_UNIQUE_SOURCE_BUCKET_NAME",
+
+  # ── 2. Storage ───────────────────────────────────────────────────────────
+  # The EXISTING S3 bucket you want to monitor (must be in the same region)
+  "SourceBucketName=YOUR_EXISTING_SOURCE_BUCKET_NAME",
+
+  # A NEW bucket to create for detection logs (must be globally unique)
   "LogBucketName=YOUR_UNIQUE_LOG_BUCKET_NAME",
+
+  # ── 3. Notifications ─────────────────────────────────────────────────────
+  # Who receives the alert emails
+  "NotificationEmail=af.us@outlook.com",
+
+  # The FROM address — must be verified in Amazon SES:
+  #   aws ses verify-email-identity --email-address YOUR_EMAIL --region us-east-1
+  "SESVerifiedSender=YOUR_VERIFIED_SES_SENDER@example.com",
+
+  # ── 4. Scanner Tuning ─────────────────────────────────────────────────────
+  # Max KB of text extracted per file submitted to AI Guard (default: 500)
+  "MaxTextKB=500",
+
+  # Lambda memory in MB — 256 | 512 | 1024 | 2048  (default: 512)
+  "LambdaMemoryMB=512",
+
+  # Lambda timeout in seconds, 30–900  (default: 300 = 5 min)
+  "LambdaTimeoutSeconds=300",
+
+  # CloudWatch log retention in days  (default: 90)
+  "LogRetentionDays=90",
+
+  # ── 5. Monitoring ─────────────────────────────────────────────────────────
+  # Yes = create CloudWatch Dashboard + error/detection alarms
+  # No  = Lambda logs only (default)
+  "EnableCloudWatchMonitoring=No",
 ]

@@ -19,7 +19,7 @@ DOCUMENT_EXTENSIONS = {
     ".html", ".htm", ".rtf",
 }
 
-MAX_TEXT_BYTES = 500 * 1024  # 500 KB
+MAX_TEXT_BYTES = int(os.environ.get("MAX_TEXT_KB", "500")) * 1024
 
 
 def lambda_handler(event, context):
@@ -53,11 +53,11 @@ def _process_file(bucket: str, key: str) -> None:
         logger.info("No text extracted from %s, skipping", key)
         return
 
-    # Truncate to first 500 KB
+    max_bytes = MAX_TEXT_BYTES
     encoded = text.encode("utf-8")
-    if len(encoded) > MAX_TEXT_BYTES:
-        text = encoded[:MAX_TEXT_BYTES].decode("utf-8", errors="ignore")
-        logger.info("Text truncated to %d bytes", MAX_TEXT_BYTES)
+    if len(encoded) > max_bytes:
+        text = encoded[:max_bytes].decode("utf-8", errors="ignore")
+        logger.info("Text truncated to %d bytes", max_bytes)
 
     client = AIGuardClient(
         api_key=os.environ["AI_GUARD_API_KEY"],

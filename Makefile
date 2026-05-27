@@ -1,10 +1,10 @@
-.PHONY: build deploy destroy test lint clean
+.PHONY: build deploy deploy-guided destroy test lint clean validate
 
-## Build the SAM application
+## Build Lambda package (requires Docker for --use-container)
 build:
 	sam build --use-container
 
-## Interactive guided deploy (first time)
+## First-time interactive deploy
 deploy-guided: build
 	sam deploy --guided
 
@@ -12,22 +12,28 @@ deploy-guided: build
 deploy: build
 	sam deploy
 
-## Tear down the CloudFormation stack
+## Validate the CloudFormation template (no AWS credentials needed)
+validate:
+	sam validate --lint
+
+## Tear down the stack (log bucket is retained by DeletionPolicy: Retain)
 destroy:
 	sam delete
 
-## Run the test suite
+## Run the test suite (no live AWS or TM credentials needed)
 test:
 	pip install -q -r requirements-dev.txt -r src/requirements.txt
 	PYTHONPATH=src pytest tests/ -v --cov=src --cov-report=term-missing
 
-## Lint with ruff (optional, install with: pip install ruff)
+## Lint Python source
 lint:
 	ruff check src/ tests/
 
-## Local invocation with a sample S3 event
+## Local invocation with the sample S3 event (requires .env.json)
 local-invoke:
-	sam local invoke AIGuardFunction --event events/sample_s3_event.json --env-vars .env.json
+	sam local invoke AIGuardFunction \
+		--event events/sample_s3_event.json \
+		--env-vars .env.json
 
 ## Remove build artefacts
 clean:

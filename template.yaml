@@ -1,77 +1,194 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
-Description: >
-  AI Guard S3 Document Monitor — scans uploaded documents via Trend Micro AI Guard
-  and alerts on malicious prompt injection or policy violations.
 
+Description: >
+  AI Guard S3 Document Monitor
+  Attaches to an existing S3 bucket and scans every uploaded document
+  (PDF, DOCX, XLSX, PPTX, TXT, CSV, and more) with Trend Micro AI Guard.
+  Sends an email alert and saves a structured JSON log on each detection.
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Console UI grouping & labels
+# ──────────────────────────────────────────────────────────────────────────────
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: "1 ─ Trend Micro AI Guard"
+        Parameters:
+          - AIGuardApiKey
+          - AIGuardEndpoint
+          - AIGuardAppName
+      - Label:
+          default: "2 ─ Storage"
+        Parameters:
+          - SourceBucketName
+          - LogBucketName
+      - Label:
+          default: "3 ─ Email Notifications (Amazon SES)"
+        Parameters:
+          - NotificationEmail
+          - SESVerifiedSender
+      - Label:
+          default: "4 ─ Scanner Tuning"
+        Parameters:
+          - MaxTextKB
+          - LambdaMemoryMB
+          - LambdaTimeoutSeconds
+          - LogRetentionDays
+      - Label:
+          default: "5 ─ CloudWatch Monitoring (optional)"
+        Parameters:
+          - EnableCloudWatchMonitoring
+    ParameterLabels:
+      AIGuardApiKey:            { default: "Vision One API Key" }
+      AIGuardEndpoint:          { default: "AI Guard Endpoint  (choose your region)" }
+      AIGuardAppName:           { default: "Application Name  (TMV1-Application-Name header)" }
+      SourceBucketName:         { default: "Existing S3 Bucket to Monitor" }
+      LogBucketName:            { default: "New S3 Bucket for Detection Logs  (must be globally unique)" }
+      NotificationEmail:        { default: "Alert Recipient Email" }
+      SESVerifiedSender:        { default: "SES Verified Sender Email" }
+      MaxTextKB:                { default: "Max Text to Scan per File  (KB)" }
+      LambdaMemoryMB:           { default: "Lambda Memory  (MB)" }
+      LambdaTimeoutSeconds:     { default: "Lambda Timeout  (seconds)" }
+      LogRetentionDays:         { default: "CloudWatch Log Retention  (days)" }
+      EnableCloudWatchMonitoring: { default: "Enable Dashboard & Alarms" }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Parameters
+# ──────────────────────────────────────────────────────────────────────────────
 Parameters:
+
+  # ── AI Guard ────────────────────────────────────────────────────────────────
+
   AIGuardApiKey:
     Type: String
     NoEcho: true
-    Description: "Trend Micro Vision One API key (Bearer token for AI Guard)"
+    MinLength: 10
+    Description: >
+      Trend Micro Vision One API key used to authenticate with AI Guard.
+      Create one at: Vision One Console → Administration → API Keys.
+      Requires the AI Guard permission scope.
 
   AIGuardEndpoint:
     Type: String
     Default: "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
-    Description: "AI Guard API endpoint URL (region-specific if required)"
+    AllowedValues:
+      - "https://api.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+      - "https://api.eu.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+      - "https://api.au.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+      - "https://api.jp.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+      - "https://api.sg.xdr.trendmicro.com/v3.0/xdr/guard/scan"
+    Description: >
+      Select the endpoint that matches your Vision One tenant region.
+      US = api.xdr  |  EU = api.eu.xdr  |  AU = api.au.xdr
+      JP = api.jp.xdr  |  SG = api.sg.xdr
 
   AIGuardAppName:
     Type: String
     Default: "ai-guard-s3-monitor"
     MaxLength: 64
-    Description: "Identifier sent in the TMV1-Application-Name header (a-z, 0-9, hyphens, underscores)"
+    AllowedPattern: "[a-zA-Z0-9_-]+"
+    ConstraintDescription: "Letters, numbers, hyphens, and underscores only."
+    Description: >
+      Identifier sent in every request as the TMV1-Application-Name header.
+      Appears in Vision One audit logs so you can trace activity back to this stack.
+
+  # ── Storage ─────────────────────────────────────────────────────────────────
+
+  SourceBucketName:
+    Type: String
+    Description: >
+      Name of the EXISTING S3 bucket you want to monitor. The bucket must be in
+      the same AWS region as this stack. A Lambda notification will be added
+      automatically — no manual bucket configuration is needed.
+
+  LogBucketName:
+    Type: String
+    Description: >
+      Name for the NEW S3 bucket created to store detection logs.
+      Must be globally unique. Logs are stored under logs/YYYY/MM/DD/.
+      Objects are auto-archived to Glacier after 90 days and deleted after 7 years.
+
+  # ── Notifications ────────────────────────────────────────────────────────────
 
   NotificationEmail:
     Type: String
     Default: "af.us@outlook.com"
-    Description: "Recipient email address for security alert notifications"
+    AllowedPattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"
+    ConstraintDescription: "Must be a valid email address."
+    Description: "Email address that receives security alert notifications when a malicious document is detected."
 
-  SesSenderEmail:
+  SESVerifiedSender:
     Type: String
-    Description: "Verified SES sender email address (must be verified in SES)"
+    AllowedPattern: "[a-zA-Z0-9._%+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}"
+    ConstraintDescription: "Must be a valid email address."
+    Description: >
+      Email address used as the FROM address for alerts.
+      This address MUST be verified in Amazon SES before alerts will be delivered.
+      To verify after deployment run the command shown in the Outputs tab.
 
-  SourceBucketName:
+  # ── Scanner Tuning ───────────────────────────────────────────────────────────
+
+  MaxTextKB:
+    Type: Number
+    Default: 500
+    MinValue: 10
+    MaxValue: 2048
+    Description: >
+      Maximum kilobytes of extracted text sent to AI Guard per file.
+      The Lambda always reads from the beginning of the document.
+      Larger values are more thorough; smaller values are faster and cheaper.
+
+  LambdaMemoryMB:
+    Type: Number
+    Default: 512
+    AllowedValues: [256, 512, 1024, 2048]
+    Description: >
+      Lambda memory in MB. AWS allocates CPU proportionally to memory.
+      512 MB is a good default. Raise to 1024 MB if you process large PDFs frequently.
+
+  LambdaTimeoutSeconds:
+    Type: Number
+    Default: 300
+    MinValue: 30
+    MaxValue: 900
+    Description: "Maximum execution time in seconds per Lambda invocation. Default is 5 minutes."
+
+  LogRetentionDays:
+    Type: Number
+    Default: 90
+    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+    Description: "How long to keep Lambda execution logs in CloudWatch Logs."
+
+  # ── Monitoring ───────────────────────────────────────────────────────────────
+
+  EnableCloudWatchMonitoring:
     Type: String
-    Description: "Name of the S3 bucket to monitor for document uploads"
+    Default: "No"
+    AllowedValues: ["Yes", "No"]
+    Description: >
+      Yes — creates a CloudWatch Dashboard (invocations, errors, duration, detections)
+      and two alarms: one for Lambda errors, one for blocked detections.
+      No — Lambda logs still go to CloudWatch Logs; no extra resources are created.
 
-  LogBucketName:
-    Type: String
-    Description: "Name of the secondary S3 bucket where detection logs are stored"
+# ──────────────────────────────────────────────────────────────────────────────
+# Conditions
+# ──────────────────────────────────────────────────────────────────────────────
+Conditions:
+  MonitoringEnabled: !Equals [!Ref EnableCloudWatchMonitoring, "Yes"]
 
-Globals:
-  Function:
-    Runtime: python3.12
-    Architectures: [arm64]
-    MemorySize: 512
-    Timeout: 300
-    Environment:
-      Variables:
-        AI_GUARD_API_KEY: !Ref AIGuardApiKey
-        AI_GUARD_ENDPOINT: !Ref AIGuardEndpoint
-        AI_GUARD_APP_NAME: !Ref AIGuardAppName
-        LOG_BUCKET_NAME: !Ref LogBucketName
-        NOTIFICATION_EMAIL: !Ref NotificationEmail
-        SES_SENDER_EMAIL: !Ref SesSenderEmail
-
+# ──────────────────────────────────────────────────────────────────────────────
+# Resources
+# ──────────────────────────────────────────────────────────────────────────────
 Resources:
-  # ── S3 Buckets ───────────────────────────────────────────────────────────
 
-  SourceBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Ref SourceBucketName
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
+  # ── 1. Log Bucket ─────────────────────────────────────────────────────────
 
   LogBucket:
     Type: AWS::S3::Bucket
+    DeletionPolicy: Retain      # keep logs even if the stack is deleted
+    UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Ref LogBucketName
       BucketEncryption:
@@ -83,9 +200,11 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
       LifecycleConfiguration:
         Rules:
-          - Id: ArchiveAfter90Days
+          - Id: ArchiveToGlacier
             Status: Enabled
             Transitions:
               - TransitionInDays: 90
@@ -94,42 +213,324 @@ Resources:
             Status: Enabled
             ExpirationInDays: 2555
 
-  # ── Lambda ────────────────────────────────────────────────────────────────
+  # ── 2. IAM Role for the Scanner Lambda ───────────────────────────────────
 
-  AIGuardFunction:
+  ScannerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-scanner-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: ScannerPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadSourceBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:HeadObject
+                Resource: !Sub "arn:aws:s3:::${SourceBucketName}/*"
+              - Sid: WriteLogBucket
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${LogBucketName}/logs/*"
+              - Sid: SendSESEmail
+                Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+
+  # ── 3. Scanner Lambda ─────────────────────────────────────────────────────
+
+  ScannerFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "${AWS::StackName}-scanner"
       CodeUri: src/
       Handler: handler.lambda_handler
-      Description: "Scans S3 document uploads with Trend Micro AI Guard"
+      Runtime: python3.12
+      Architectures: [arm64]
+      MemorySize: !Ref LambdaMemoryMB
+      Timeout: !Ref LambdaTimeoutSeconds
+      Role: !GetAtt ScannerRole.Arn
+      Description: !Sub "Scans s3://${SourceBucketName} uploads with Trend Micro AI Guard"
+      Environment:
+        Variables:
+          AI_GUARD_API_KEY:    !Ref AIGuardApiKey
+          AI_GUARD_ENDPOINT:   !Ref AIGuardEndpoint
+          AI_GUARD_APP_NAME:   !Ref AIGuardAppName
+          LOG_BUCKET_NAME:     !Ref LogBucketName
+          NOTIFICATION_EMAIL:  !Ref NotificationEmail
+          SES_SENDER_EMAIL:    !Ref SESVerifiedSender
+          MAX_TEXT_KB:         !Ref MaxTextKB
+
+  ScannerLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ScannerFunction}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # Allow the source S3 bucket to invoke the scanner
+  S3InvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt ScannerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub "arn:aws:s3:::${SourceBucketName}"
+      SourceAccount: !Ref AWS::AccountId
+
+  # ── 4. Custom Resource — attach notification to existing S3 bucket ────────
+  #
+  # CloudFormation can only manage notification configs on buckets it creates.
+  # This small helper Lambda calls PutBucketNotificationConfiguration on the
+  # existing bucket on Create/Update, and removes it cleanly on Delete.
+  # ─────────────────────────────────────────────────────────────────────────
+
+  NotificationHelperRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AWS::StackName}-notif-helper-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
       Policies:
-        - S3ReadPolicy:
-            BucketName: !Ref SourceBucketName
-        - S3CrudPolicy:
-            BucketName: !Ref LogBucketName
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ses:SendEmail
-                - ses:SendRawEmail
-              Resource: "*"
-      Events:
-        DocumentUpload:
-          Type: S3
-          Properties:
-            Bucket: !Ref SourceBucket
-            Events: s3:ObjectCreated:*
+        - PolicyName: S3NotificationPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetBucketNotification
+                  - s3:PutBucketNotification
+                Resource: !Sub "arn:aws:s3:::${SourceBucketName}"
 
+  NotificationHelperFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-notif-helper"
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt NotificationHelperRole.Arn
+      Timeout: 60
+      Description: "CFN custom resource: adds/removes S3 event notification on existing bucket"
+      Code:
+        ZipFile: |
+          import logging
+          import boto3
+          import cfnresponse
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          s3 = boto3.client("s3")
+
+          def handler(event, context):
+              props      = event["ResourceProperties"]
+              bucket     = props["BucketName"]
+              lambda_arn = props["LambdaArn"]
+              phys_id    = f"s3notif-{bucket}"
+              try:
+                  req = event["RequestType"]
+                  if req in ("Create", "Update"):
+                      cfg = _get_cfg(bucket)
+                      # Remove any previous entry for our Lambda so updates are idempotent
+                      lambdas = [
+                          n for n in cfg.get("LambdaFunctionConfigurations", [])
+                          if n.get("LambdaFunctionArn") != lambda_arn
+                      ]
+                      lambdas.append({
+                          "Id": "AIGuardMonitor",
+                          "LambdaFunctionArn": lambda_arn,
+                          "Events": ["s3:ObjectCreated:*"],
+                      })
+                      cfg["LambdaFunctionConfigurations"] = lambdas
+                      s3.put_bucket_notification_configuration(
+                          Bucket=bucket,
+                          NotificationConfiguration=cfg,
+                      )
+                      logger.info("Notification attached to %s -> %s", bucket, lambda_arn)
+
+                  elif req == "Delete":
+                      try:
+                          cfg = _get_cfg(bucket)
+                          cfg["LambdaFunctionConfigurations"] = [
+                              n for n in cfg.get("LambdaFunctionConfigurations", [])
+                              if n.get("LambdaFunctionArn") != lambda_arn
+                          ]
+                          s3.put_bucket_notification_configuration(
+                              Bucket=bucket,
+                              NotificationConfiguration=cfg,
+                          )
+                          logger.info("Notification removed from %s", bucket)
+                      except Exception as exc:
+                          # Non-fatal: log and continue so stack deletion doesn't get stuck
+                          logger.warning("Could not remove notification on delete: %s", exc)
+
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {}, phys_id)
+
+              except Exception as exc:
+                  logger.exception("Custom resource failed")
+                  cfnresponse.send(
+                      event, context, cfnresponse.FAILED, {"Error": str(exc)}, phys_id
+                  )
+
+          def _get_cfg(bucket):
+              resp = s3.get_bucket_notification_configuration(Bucket=bucket)
+              resp.pop("ResponseMetadata", None)
+              return resp
+
+  # Trigger the helper — this is the actual CloudFormation custom resource
+  BucketNotification:
+    Type: Custom::S3BucketNotification
+    DependsOn:
+      - S3InvokePermission        # permission must exist before we attach the notification
+      - NotificationHelperFunction
+    Properties:
+      ServiceToken: !GetAtt NotificationHelperFunction.Arn
+      BucketName:  !Ref SourceBucketName
+      LambdaArn:   !GetAtt ScannerFunction.Arn
+
+  # ── 5. CloudWatch Monitoring (conditional) ────────────────────────────────
+
+  # Alarm fires when the scanner Lambda throws any error
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringEnabled
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-scanner-errors"
+      AlarmDescription: !Sub "Scanner Lambda errors detected in stack ${AWS::StackName}"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ScannerFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # Extract a custom metric every time a document is blocked
+  BlockedDetectionMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: MonitoringEnabled
+    DependsOn: ScannerLogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ScannerFunction}"
+      FilterPattern: '"Malicious content detected"'
+      MetricTransformations:
+        - MetricName: BlockedDetections
+          MetricNamespace: !Sub "AIGuard/${AWS::StackName}"
+          MetricValue: "1"
+          DefaultValue: 0
+
+  # Alarm fires as soon as any document is blocked
+  BlockedDetectionAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MonitoringEnabled
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-blocked-detections"
+      AlarmDescription: !Sub "AI Guard blocked a document upload in stack ${AWS::StackName}"
+      Namespace: !Sub "AIGuard/${AWS::StackName}"
+      MetricName: BlockedDetections
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # Dashboard with four widgets: invocations, errors, detections, duration
+  MonitoringDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Condition: MonitoringEnabled
+    Properties:
+      DashboardName: !Sub "${AWS::StackName}-dashboard"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric", "x": 0, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Invocations",
+                "metrics": [["AWS/Lambda","Invocations","FunctionName","${ScannerFunction}"]],
+                "period": 300, "stat": "Sum", "view": "timeSeries", "region": "${AWS::Region}"
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 0, "width": 12, "height": 6,
+              "properties": {
+                "title": "Lambda Errors",
+                "metrics": [["AWS/Lambda","Errors","FunctionName","${ScannerFunction}"]],
+                "period": 300, "stat": "Sum", "view": "timeSeries", "region": "${AWS::Region}",
+                "annotations": {"horizontal": [{"value": 1, "color": "#d62728"}]}
+              }
+            },
+            {
+              "type": "metric", "x": 0, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Blocked Detections",
+                "metrics": [["AIGuard/${AWS::StackName}","BlockedDetections"]],
+                "period": 300, "stat": "Sum", "view": "timeSeries", "region": "${AWS::Region}",
+                "annotations": {"horizontal": [{"value": 1, "color": "#ff7f0e"}]}
+              }
+            },
+            {
+              "type": "metric", "x": 12, "y": 6, "width": 12, "height": 6,
+              "properties": {
+                "title": "Scanner Duration (ms)",
+                "metrics": [
+                  ["AWS/Lambda","Duration","FunctionName","${ScannerFunction}",{"label":"p50","stat":"p50"}],
+                  ["AWS/Lambda","Duration","FunctionName","${ScannerFunction}",{"label":"p95","stat":"p95"}]
+                ],
+                "period": 300, "view": "timeSeries", "region": "${AWS::Region}"
+              }
+            }
+          ]
+        }
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Outputs
+# ──────────────────────────────────────────────────────────────────────────────
 Outputs:
-  FunctionArn:
-    Description: "Lambda function ARN"
-    Value: !GetAtt AIGuardFunction.Arn
 
-  SourceBucketName:
-    Description: "Upload documents to this bucket to trigger scanning"
-    Value: !Ref SourceBucket
+  ScannerFunctionArn:
+    Description: "Scanner Lambda ARN"
+    Value: !GetAtt ScannerFunction.Arn
 
-  LogBucketName:
-    Description: "Detection logs are stored here under logs/YYYY/MM/DD/"
-    Value: !Ref LogBucket
+  SourceBucketMonitored:
+    Description: "S3 bucket being monitored for document uploads"
+    Value: !Ref SourceBucketName
+
+  LogBucketUrl:
+    Description: "Detection logs are stored under logs/YYYY/MM/DD/ in this bucket"
+    Value: !Sub "s3://${LogBucketName}/logs/"
+
+  SESVerifyCommand:
+    Description: >
+      ACTION REQUIRED — Run this command to verify the SES sender email.
+      Alerts will not be delivered until the address is verified.
+    Value: !Sub "aws ses verify-email-identity --email-address ${SESVerifiedSender} --region ${AWS::Region}"
+
+  DashboardUrl:
+    Condition: MonitoringEnabled
+    Description: "CloudWatch Dashboard"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home?region=${AWS::Region}#dashboards:name=${AWS::StackName}-dashboard"
