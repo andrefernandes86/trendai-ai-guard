@@ -9,8 +9,14 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
-_MAX_RETRIES = 3
+# 413 is included here because empirically AI Guard returns
+# PayloadTooLarge under sustained concurrent load even for bodies well
+# below the 51,200-byte ceiling - we treat that as a soft rate-limit
+# signal and back off. Real oversize bodies are caught by the client's
+# pre-flight trim before the request goes out, so a 413 on the wire
+# is almost always transient.
+_RETRY_STATUS_CODES = {413, 429, 500, 502, 503, 504}
+_MAX_RETRIES = 4
 _BACKOFF_BASE = 2  # seconds
 
 # TMV1-Application-Name constraint per AI Guard API:
@@ -18,12 +24,13 @@ _BACKOFF_BASE = 2  # seconds
 _APP_NAME_INVALID = re.compile(r"[^a-zA-Z0-9_-]")
 _APP_NAME_MAX_LEN = 64
 
-# AI Guard request payload hard limit (discovered empirically from the
-# server's "Payload size N bytes exceeds maximum allowed size of 51200
-# bytes" response). We pre-flight the JSON body so a caller can pass any
-# size of text and we'll trim it to fit; this is much friendlier than
-# letting Trend reject the whole scan with HTTP 413.
-MAX_API_PAYLOAD_BYTES = 51200  # 50 KB
+# AI Guard request payload hard limit. Confirmed by direct probe:
+# bodies <= 51,200 bytes succeed; bodies > 51,200 bytes return HTTP
+# 413. Earlier observations of 51,200-byte bodies "failing" under
+# Lambda burst were concurrency-induced - AI Guard appears to return
+# 413 rather than 429 when its backend is saturated, which is why 413
+# is now also in the retry set.
+MAX_API_PAYLOAD_BYTES = 51200  # 50 KB exactly (inclusive)
 
 
 def sanitize_app_name(value: str, fallback: str = "ai-guard-s3-monitor") -> str:
