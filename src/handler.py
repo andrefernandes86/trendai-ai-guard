@@ -65,11 +65,26 @@ def _process_file(bucket: str, key: str) -> None:
         return
 
     encoded = text.encode("utf-8")
-    if MAX_TEXT_BYTES > 0 and len(encoded) > MAX_TEXT_BYTES:
+    original_bytes = len(encoded)
+    if MAX_TEXT_BYTES == 0:
+        # No-limit mode
+        logger.info(
+            "MAX_TEXT_KB=0 - sending full %d bytes of extracted text",
+            original_bytes,
+        )
+    elif original_bytes > MAX_TEXT_BYTES:
+        # Cap is smaller than the file - truncate
         text = encoded[:MAX_TEXT_BYTES].decode("utf-8", errors="ignore")
-        logger.info("Text truncated to %d bytes", MAX_TEXT_BYTES)
-    elif MAX_TEXT_BYTES == 0:
-        logger.info("MAX_TEXT_KB=0 - sending full %d bytes of extracted text", len(encoded))
+        logger.info(
+            "Text truncated from %d to %d bytes (cap = %d KB)",
+            original_bytes, MAX_TEXT_BYTES, MAX_TEXT_BYTES // 1024,
+        )
+    else:
+        # Cap is larger than the file - safe no-op, send everything
+        logger.info(
+            "Sending full %d bytes of extracted text (under the %d KB cap)",
+            original_bytes, MAX_TEXT_BYTES // 1024,
+        )
 
     client = AIGuardClient(
         api_key=os.environ["AI_GUARD_API_KEY"],

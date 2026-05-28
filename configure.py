@@ -434,10 +434,30 @@ def main() -> None:
                                   else "Not a valid email.")
 
     print()
-    print("  Max text per file:")
-    print("    - 0          = no limit, send the full extracted text")
-    print("    - 10..2048   = cap at that many KB from the start of the file")
-    max_text_kb    = ask_int("Max text per file (KB)",          500,  0, 2048)
+    print("  Max text sent to AI Guard per file:")
+    print()
+    print("    1) 500 KB         (recommended - first 500 KB of the file)")
+    print("    2) Full file      (no limit, send the entire content)")
+    print("    3) Custom amount  (you choose how many KB)")
+    print()
+    while True:
+        text_choice = ask("Choose", default="1",
+                          validator=lambda v: None if v in ("1", "2", "3")
+                          else "Enter 1, 2, or 3.")
+        if text_choice == "1":
+            max_text_kb = 500
+            break
+        if text_choice == "2":
+            max_text_kb = 0
+            break
+        # Choice 3: any positive integer, no upper bound
+        while True:
+            raw = input("  Cap in KB (any positive number, no upper limit) [500]: ").strip() or "500"
+            if raw.isdigit() and int(raw) >= 1:
+                max_text_kb = int(raw)
+                break
+            print("  Enter a positive whole number (e.g. 500, 2048, 10000).")
+        break
     lambda_memory  = ask_int("Lambda memory MB [256/512/1024/2048]", 512, 256, 2048)
     lambda_timeout = ask_int("Lambda timeout seconds (30-900)", 300, 30, 900)
     log_retention  = ask_int("CloudWatch log retention days",    90,   7, 365)

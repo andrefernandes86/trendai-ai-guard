@@ -294,10 +294,31 @@ if [[ -n "$NOTIFICATION_EMAIL" ]]; then
 fi
 
 say ""
-say "  Max text per file (KB):"
-say "    - 0          = no limit, send the full extracted text"
-say "    - 10..2048   = cap at that many KB from the start of the file"
-MAX_TEXT_KB=$(ask "Max text per file" "500")
+say "  Max text sent to AI Guard per file:"
+say ""
+say "    1) 500 KB         (recommended - first 500 KB of the file)"
+say "    2) Full file      (no limit, send the entire content)"
+say "    3) Custom amount  (you choose how many KB)"
+say ""
+while :; do
+    TEXT_CHOICE=$(ask "Choose" "1")
+    case "$TEXT_CHOICE" in
+        1) MAX_TEXT_KB=500; break ;;
+        2) MAX_TEXT_KB=0;   break ;;
+        3)
+            while :; do
+                CUSTOM_KB=$(ask "Cap in KB (any positive number, no upper limit)" "500")
+                if [[ "$CUSTOM_KB" =~ ^[1-9][0-9]*$ ]]; then
+                    MAX_TEXT_KB=$CUSTOM_KB
+                    break
+                fi
+                err "Enter a positive whole number (e.g. 500, 2048, 10000)."
+            done
+            break
+            ;;
+        *) err "Please enter 1, 2, or 3." ;;
+    esac
+done
 LAMBDA_MEMORY=$(ask "Lambda memory MB [256/512/1024/2048]" "512")
 LAMBDA_TIMEOUT=$(ask "Lambda timeout seconds (30-900)" "300")
 LOG_RETENTION=$(ask "CloudWatch log retention days" "90")
