@@ -193,8 +193,16 @@ Parameters:
   LogRetentionDays:
     Type: Number
     Default: 90
-    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
-    Description: "How long to keep Lambda execution logs in CloudWatch Logs."
+    # The complete set of values accepted by CloudWatch Logs' API for
+    # log-group retention. Restricting to this list at the CFN layer
+    # gives a clear validation error if a wrong value sneaks in.
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: >
+      How long to keep Lambda execution logs in CloudWatch Logs.
+      Must be one of the CloudWatch-supported retention values: 1, 3,
+      5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827,
+      2192, 2557, 2922, 3288, or 3653 days. Short values are cheaper
+      (storage is billed per GB-month) but make incident review harder.
 
   # ── File Tagging ────────────────────────────────────────────────────────────
 

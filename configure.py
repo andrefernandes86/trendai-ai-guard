@@ -485,7 +485,36 @@ def main() -> None:
                      else "Enter 1, 2, 3, or 4.")
     lambda_memory = {"1": 256, "2": 512, "3": 1024, "4": 2048}[mem_choice]
     lambda_timeout = ask_int("Lambda timeout seconds (30-900)", 300, 30, 900)
-    log_retention  = ask_int("CloudWatch log retention days",    90,   7, 365)
+    print()
+    print("  CloudWatch Logs retention (days to keep Lambda execution logs):")
+    print()
+    print("    1) 1 day        (minimum; testing only)")
+    print("    2) 7 days       (short)")
+    print("    3) 30 days")
+    print("    4) 90 days      [Recommended]")
+    print("    5) 365 days     (1 year)")
+    print("    6) Custom       (any CloudWatch-valid value)")
+    print()
+    valid_retentions = {1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180,
+                        365, 400, 545, 731, 1827, 2192, 2557, 2922,
+                        3288, 3653}
+    while True:
+        ret_choice = ask("Choose", default="4",
+                         validator=lambda v: None if v in ("1","2","3","4","5","6")
+                         else "Enter 1-6.")
+        mapping = {"1": 1, "2": 7, "3": 30, "4": 90, "5": 365}
+        if ret_choice in mapping:
+            log_retention = mapping[ret_choice]
+            break
+        # Choice 6: custom value validated against CloudWatch-valid set
+        valid_str = ", ".join(str(v) for v in sorted(valid_retentions))
+        while True:
+            raw = input(f"  Retention in days  [90]: ").strip() or "90"
+            if raw.isdigit() and int(raw) in valid_retentions:
+                log_retention = int(raw)
+                break
+            print(f"  Must be one of: {valid_str}")
+        break
     print()
     print("  File tagging: when enabled, each scanned file gets an S3 tag")
     print("  'tm-v1-aiguard' with value 'no-risks-detected' or")

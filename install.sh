@@ -354,7 +354,41 @@ while :; do
     esac
 done
 LAMBDA_TIMEOUT=$(ask "Lambda timeout seconds (30-900)" "300")
-LOG_RETENTION=$(ask "CloudWatch log retention days" "90")
+say ""
+say "  CloudWatch Logs retention (how many days to keep Lambda logs):"
+say ""
+say "    1) 1 day        (minimum; testing only)"
+say "    2) 7 days       (short)"
+say "    3) 30 days"
+say "    4) 90 days      [Recommended]"
+say "    5) 365 days     (1 year)"
+say "    6) Custom       (any CloudWatch-valid value: 1, 3, 5, 7, 14, 30,"
+say "                     60, 90, 120, 150, 180, 365, 400, 545, 731,"
+say "                     1827, 2192, 2557, 2922, 3288, 3653)"
+say ""
+VALID_RETENTIONS=" 1 3 5 7 14 30 60 90 120 150 180 365 400 545 731 1827 2192 2557 2922 3288 3653 "
+while :; do
+    RET_CHOICE=$(ask "Choose" "4")
+    case "$RET_CHOICE" in
+        1) LOG_RETENTION=1;   break ;;
+        2) LOG_RETENTION=7;   break ;;
+        3) LOG_RETENTION=30;  break ;;
+        4) LOG_RETENTION=90;  break ;;
+        5) LOG_RETENTION=365; break ;;
+        6)
+            while :; do
+                CUSTOM_RET=$(ask "Retention in days" "90")
+                if [[ "$CUSTOM_RET" =~ ^[0-9]+$ ]] && [[ "$VALID_RETENTIONS" == *" $CUSTOM_RET "* ]]; then
+                    LOG_RETENTION=$CUSTOM_RET
+                    break
+                fi
+                err "Must be one of:${VALID_RETENTIONS}"
+            done
+            break
+            ;;
+        *) err "Please enter 1-6." ;;
+    esac
+done
 
 say ""
 say "  File tagging:"

@@ -320,7 +320,7 @@ If any of those still report results, repeat the corresponding step.
 | `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–2048 caps the payload at that many KB read from the start of the document. If the cap is larger than the file, the handler safely sends the whole file (the cap is an upper bound, not a required length). |
 | `LambdaMemoryMB` | No | `512` | Lambda memory in MB (256 / 512 / 1024 / 2048). Controls RAM ceiling, CPU speed, and per-scan cost together — see [Lambda memory and cost](#lambda-memory-and-cost) for the file-size limits and projected cost at each tier. |
 | `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
-| `LogRetentionDays` | No | `90` | CloudWatch log retention (7-365) |
+| `LogRetentionDays` | No | `90` | CloudWatch log retention in days. Must be a CloudWatch-supported value: `1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653`. |
 | `EnableFileTagging` | No | `No` | `Yes` writes a `tm-v1-aiguard` S3 object tag back to each scanned file (`no-risks-detected` or `malicious-prompt-detected`) |
 | `EnableCloudWatchMonitoring` | No | `No` | `Yes` adds dashboard + alarms |
 
