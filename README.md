@@ -317,7 +317,7 @@ If any of those still report results, repeat the corresponding step.
 | `LogBucketName` | Yes | — | Bucket for detection logs (created if absent) |
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
 | `SESVerifiedSender` | No | empty | Verified SES FROM address |
-| `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Any positive number caps the payload at that many KB read from the start of the document. There is no upper bound — if the cap is larger than the file, the handler safely sends the whole file (the cap is an upper bound, not a required length). |
+| `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–2048 caps the payload at that many KB read from the start of the document. If the cap is larger than the file, the handler safely sends the whole file (the cap is an upper bound, not a required length). |
 | `LambdaMemoryMB` | No | `512` | Lambda memory: 256 / 512 / 1024 / 2048 |
 | `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
 | `LogRetentionDays` | No | `90` | CloudWatch log retention (7-365) |

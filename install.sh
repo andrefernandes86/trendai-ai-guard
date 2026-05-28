@@ -307,12 +307,14 @@ while :; do
         2) MAX_TEXT_KB=0;   break ;;
         3)
             while :; do
-                CUSTOM_KB=$(ask "Cap in KB (any positive number, no upper limit)" "500")
-                if [[ "$CUSTOM_KB" =~ ^[1-9][0-9]*$ ]]; then
+                CUSTOM_KB=$(ask "Cap in KB (10-2048)" "500")
+                if [[ "$CUSTOM_KB" =~ ^[0-9]+$ ]] \
+                   && (( CUSTOM_KB >= 10 )) \
+                   && (( CUSTOM_KB <= 2048 )); then
                     MAX_TEXT_KB=$CUSTOM_KB
                     break
                 fi
-                err "Enter a positive whole number (e.g. 500, 2048, 10000)."
+                err "Enter a whole number between 10 and 2048."
             done
             break
             ;;

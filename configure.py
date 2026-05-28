@@ -450,13 +450,13 @@ def main() -> None:
         if text_choice == "2":
             max_text_kb = 0
             break
-        # Choice 3: any positive integer, no upper bound
+        # Choice 3: custom value, bounded 10-2048
         while True:
-            raw = input("  Cap in KB (any positive number, no upper limit) [500]: ").strip() or "500"
-            if raw.isdigit() and int(raw) >= 1:
+            raw = input("  Cap in KB (10-2048) [500]: ").strip() or "500"
+            if raw.isdigit() and 10 <= int(raw) <= 2048:
                 max_text_kb = int(raw)
                 break
-            print("  Enter a positive whole number (e.g. 500, 2048, 10000).")
+            print("  Enter a whole number between 10 and 2048.")
         break
     lambda_memory  = ask_int("Lambda memory MB [256/512/1024/2048]", 512, 256, 2048)
     lambda_timeout = ask_int("Lambda timeout seconds (30-900)", 300, 30, 900)
