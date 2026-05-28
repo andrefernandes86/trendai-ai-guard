@@ -433,10 +433,19 @@ def main() -> None:
                                   validator=lambda v: None if EMAIL_RE.match(v)
                                   else "Not a valid email.")
 
-    max_text_kb    = ask_int("Max text per file (KB, 10-2048)",  500,  10, 2048)
+    print()
+    print("  Max text per file:")
+    print("    - 0          = no limit, send the full extracted text")
+    print("    - 10..2048   = cap at that many KB from the start of the file")
+    max_text_kb    = ask_int("Max text per file (KB)",          500,  0, 2048)
     lambda_memory  = ask_int("Lambda memory MB [256/512/1024/2048]", 512, 256, 2048)
     lambda_timeout = ask_int("Lambda timeout seconds (30-900)", 300, 30, 900)
     log_retention  = ask_int("CloudWatch log retention days",    90,   7, 365)
+    print()
+    print("  File tagging: when enabled, each scanned file gets an S3 tag")
+    print("  'tm-v1-aiguard' with value 'no-risks-detected' or")
+    print("  'malicious-prompt-detected' (existing tags are preserved).")
+    enable_tagging = ask_yn("Add 'tm-v1-aiguard' tags to scanned files?", default=False)
     print()
     enable_cw = ask_yn("Enable CloudWatch Dashboard + Alarms?", default=False)
 
@@ -458,10 +467,11 @@ def main() -> None:
         ("Fallback app name",      app_name),
         ("Alert recipient",        notification_email or "(disabled)"),
         ("SES sender",             ses_sender or "(disabled)"),
-        ("Max text",               f"{max_text_kb} KB"),
+        ("Max text",               "0 KB (no limit, full file)" if max_text_kb == 0 else f"{max_text_kb} KB"),
         ("Lambda memory",          f"{lambda_memory} MB"),
         ("Lambda timeout",         f"{lambda_timeout}s"),
         ("Log retention",          f"{log_retention} days"),
+        ("Tag scanned files",      "Yes" if enable_tagging else "No"),
         ("CloudWatch monitoring",  "Yes" if enable_cw else "No"),
     ]
     for label, value in rows:
@@ -518,6 +528,7 @@ def main() -> None:
         "NotificationEmail":           notification_email,
         "SESVerifiedSender":           ses_sender,
         "MaxTextKB":                   str(max_text_kb),
+        "EnableFileTagging":           "Yes" if enable_tagging else "No",
         "LambdaMemoryMB":              str(lambda_memory),
         "LambdaTimeoutSeconds":        str(lambda_timeout),
         "LogRetentionDays":            str(log_retention),

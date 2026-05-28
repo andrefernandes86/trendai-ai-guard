@@ -41,7 +41,11 @@ Metadata:
           - LambdaTimeoutSeconds
           - LogRetentionDays
       - Label:
-          default: "5 - CloudWatch Monitoring (optional)"
+          default: "5 - File Tagging (optional)"
+        Parameters:
+          - EnableFileTagging
+      - Label:
+          default: "6 - CloudWatch Monitoring (optional)"
         Parameters:
           - EnableCloudWatchMonitoring
     ParameterLabels:
@@ -52,10 +56,11 @@ Metadata:
       LogBucketName:            { default: "New S3 Bucket for Detection Logs  (must be globally unique)" }
       NotificationEmail:        { default: "Alert Recipient Email" }
       SESVerifiedSender:        { default: "SES Verified Sender Email" }
-      MaxTextKB:                { default: "Max Text to Scan per File  (KB)" }
+      MaxTextKB:                { default: "Max Text to Scan per File  (KB; 0 = no limit, send full content)" }
       LambdaMemoryMB:           { default: "Lambda Memory  (MB)" }
       LambdaTimeoutSeconds:     { default: "Lambda Timeout  (seconds)" }
       LogRetentionDays:         { default: "CloudWatch Log Retention  (days)" }
+      EnableFileTagging:        { default: "Add 'tm-v1-aiguard' S3 tag to scanned files" }
       EnableCloudWatchMonitoring: { default: "Enable Dashboard & Alarms" }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -153,12 +158,15 @@ Parameters:
   MaxTextKB:
     Type: Number
     Default: 500
-    MinValue: 10
+    MinValue: 0
     MaxValue: 2048
     Description: >
       Maximum kilobytes of extracted text sent to AI Guard per file.
-      The Lambda always reads from the beginning of the document.
-      Larger values are more thorough; smaller values are faster and cheaper.
+      Set to 0 to send the entire extracted text (no truncation - the
+      whole file's text contents go to AI Guard; useful for small text
+      files or when full coverage matters). Values 10-2048 truncate at
+      that many KB from the start of the document. Larger values are
+      more thorough; smaller values are faster and cheaper.
 
   LambdaMemoryMB:
     Type: Number
@@ -181,6 +189,22 @@ Parameters:
     AllowedValues: [7, 14, 30, 60, 90, 180, 365]
     Description: "How long to keep Lambda execution logs in CloudWatch Logs."
 
+  # ── File Tagging ────────────────────────────────────────────────────────────
+
+  EnableFileTagging:
+    Type: String
+    Default: "No"
+    AllowedValues: ["Yes", "No"]
+    Description: >
+      Yes - after each scan, write an S3 object tag back to the source
+      file: 'tm-v1-aiguard=no-risks-detected' if AI Guard allowed it,
+      or 'tm-v1-aiguard=malicious-prompt-detected' if it was blocked.
+      Useful when you want downstream automation (Lambda triggers, S3
+      object filters, lifecycle rules) to react to the scan verdict
+      without consulting the log bucket. Existing object tags are
+      preserved - only the 'tm-v1-aiguard' tag is added or updated.
+      No - the source file is read but never modified or tagged.
+
   # ── Monitoring ───────────────────────────────────────────────────────────────
 
   EnableCloudWatchMonitoring:
@@ -196,8 +220,9 @@ Parameters:
 # Conditions
 # ──────────────────────────────────────────────────────────────────────────────
 Conditions:
-  MonitoringEnabled: !Equals [!Ref EnableCloudWatchMonitoring, "Yes"]
-  EmailEnabled: !Not [!Equals [!Ref NotificationEmail, ""]]
+  MonitoringEnabled:  !Equals [!Ref EnableCloudWatchMonitoring, "Yes"]
+  EmailEnabled:       !Not [!Equals [!Ref NotificationEmail, ""]]
+  FileTaggingEnabled: !Equals [!Ref EnableFileTagging, "Yes"]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Resources
@@ -232,8 +257,14 @@ Resources:
             Statement:
               - Sid: ReadSourceBucket
                 Effect: Allow
-                Action:
-                  - s3:GetObject
+                # When file tagging is enabled, also allow GetObjectTagging
+                # (so we can read existing tags and merge) and PutObjectTagging
+                # (so we can write the verdict tag back). Granted only when
+                # the EnableFileTagging condition is on.
+                Action: !If
+                  - FileTaggingEnabled
+                  - [s3:GetObject, s3:GetObjectTagging, s3:PutObjectTagging]
+                  - [s3:GetObject]
                 Resource: !Sub "arn:aws:s3:::${SourceBucketName}/*"
               - Sid: WriteLogBucket
                 Effect: Allow
@@ -270,13 +301,14 @@ Resources:
       Description: !Sub "Scans s3://${SourceBucketName} uploads with Trend Micro AI Guard"
       Environment:
         Variables:
-          AI_GUARD_API_KEY:    !Ref AIGuardApiKey
-          AI_GUARD_ENDPOINT:   !Ref AIGuardEndpoint
-          AI_GUARD_APP_NAME:   !Ref AIGuardAppName
-          LOG_BUCKET_NAME:     !Ref LogBucketName
-          NOTIFICATION_EMAIL:  !Ref NotificationEmail
-          SES_SENDER_EMAIL:    !Ref SESVerifiedSender
-          MAX_TEXT_KB:         !Ref MaxTextKB
+          AI_GUARD_API_KEY:     !Ref AIGuardApiKey
+          AI_GUARD_ENDPOINT:    !Ref AIGuardEndpoint
+          AI_GUARD_APP_NAME:    !Ref AIGuardAppName
+          LOG_BUCKET_NAME:      !Ref LogBucketName
+          NOTIFICATION_EMAIL:   !Ref NotificationEmail
+          SES_SENDER_EMAIL:     !Ref SESVerifiedSender
+          MAX_TEXT_KB:          !Ref MaxTextKB
+          ENABLE_FILE_TAGGING:  !Ref EnableFileTagging
 
   ScannerLogGroup:
     Type: AWS::Logs::LogGroup

@@ -31,6 +31,7 @@ aws cloudformation deploy \
     LambdaMemoryMB="512" \
     LambdaTimeoutSeconds="300" \
     LogRetentionDays="90" \
+    EnableFileTagging="No" \
     EnableCloudWatchMonitoring="No"
 
 echo "Stack deployed. Check Outputs tab in CloudFormation for next steps."

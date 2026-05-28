@@ -317,10 +317,11 @@ If any of those still report results, repeat the corresponding step.
 | `LogBucketName` | Yes | — | Bucket for detection logs (created if absent) |
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
 | `SESVerifiedSender` | No | empty | Verified SES FROM address |
-| `MaxTextKB` | No | `500` | Max KB of text per scan (10-2048) |
+| `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10-2048 caps the payload at that many KB from the start of the document. |
 | `LambdaMemoryMB` | No | `512` | Lambda memory: 256 / 512 / 1024 / 2048 |
 | `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
 | `LogRetentionDays` | No | `90` | CloudWatch log retention (7-365) |
+| `EnableFileTagging` | No | `No` | `Yes` writes a `tm-v1-aiguard` S3 object tag back to each scanned file (`no-risks-detected` or `malicious-prompt-detected`) |
 | `EnableCloudWatchMonitoring` | No | `No` | `Yes` adds dashboard + alarms |
 
 The Lambda deploy bucket name is derived inside the template
@@ -353,6 +354,41 @@ The header is auto-sanitized to satisfy Trend's constraint
 (`[a-zA-Z0-9_-]`, max 64 chars). The `AIGuardAppName` parameter is now
 only used as a fallback if the bucket+file string sanitizes to empty
 (extremely rare — e.g. an empty key).
+
+---
+
+## Optional feature: S3 object tagging
+
+When `EnableFileTagging=Yes` (you can turn this on during install or by
+editing `cfn-deploy.sh` and re-running it), the Lambda writes an S3
+object tag back onto each scanned file in the source bucket:
+
+| Verdict | Tag value |
+|---|---|
+| AI Guard allowed | `tm-v1-aiguard = no-risks-detected` |
+| AI Guard blocked | `tm-v1-aiguard = malicious-prompt-detected` |
+
+The Lambda **merges** with whatever tags are already on the object —
+only the `tm-v1-aiguard` key is added or updated; everything else is
+preserved. The tag is written *after* the detection log and email
+alert, and tagging failures are logged but never fail the scan.
+
+Common ways to use it:
+
+- **Lifecycle rules**: build an S3 lifecycle rule that moves any object
+  with `tm-v1-aiguard=malicious-prompt-detected` into a quarantine
+  storage class or transitions it for review.
+- **Downstream Lambda**: trigger a second Lambda only when the verdict
+  tag is set, via an EventBridge rule on the
+  `s3:ObjectTagging:Put` event.
+- **At-a-glance filters**: in the S3 console, filter the source bucket
+  by `Tag: tm-v1-aiguard = malicious-prompt-detected` to see every
+  file Trend Micro flagged.
+
+Required IAM is granted automatically by the template only when this
+feature is enabled (`s3:GetObjectTagging` + `s3:PutObjectTagging` on
+the source bucket). When `EnableFileTagging=No` (the default), the
+scanner's IAM role is read-only against the source bucket.
 
 ---
 

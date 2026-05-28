@@ -293,11 +293,29 @@ if [[ -n "$NOTIFICATION_EMAIL" ]]; then
     valid_email "$SES_SENDER" || { err "Invalid SES sender email."; exit 1; }
 fi
 
-MAX_TEXT_KB=$(ask "Max text per file (KB, 10-2048)" "500")
+say ""
+say "  Max text per file (KB):"
+say "    - 0          = no limit, send the full extracted text"
+say "    - 10..2048   = cap at that many KB from the start of the file"
+MAX_TEXT_KB=$(ask "Max text per file" "500")
 LAMBDA_MEMORY=$(ask "Lambda memory MB [256/512/1024/2048]" "512")
 LAMBDA_TIMEOUT=$(ask "Lambda timeout seconds (30-900)" "300")
 LOG_RETENTION=$(ask "CloudWatch log retention days" "90")
 
+say ""
+say "  File tagging:"
+say "    When enabled, each scanned file in the source bucket gets an"
+say "    S3 object tag with the verdict:"
+say "      tm-v1-aiguard = no-risks-detected     (AI Guard allowed it)"
+say "      tm-v1-aiguard = malicious-prompt-detected   (AI Guard blocked it)"
+say "    Existing tags on the object are preserved."
+if ask_yn "Add 'tm-v1-aiguard' tags to scanned files?" "N"; then
+    ENABLE_TAGGING="Yes"
+else
+    ENABLE_TAGGING="No"
+fi
+
+say ""
 if ask_yn "Enable CloudWatch Dashboard + Alarms?" "N"; then
     ENABLE_CW="Yes"
 else
@@ -318,10 +336,15 @@ printf '  %-26s %s\n'  "AI Guard endpoint"       "$ENDPOINT"
 printf '  %-26s %s\n'  "Fallback app name"       "$APP_NAME"
 printf '  %-26s %s\n'  "Alert recipient"         "${NOTIFICATION_EMAIL:-(disabled)}"
 printf '  %-26s %s\n'  "SES sender"              "${SES_SENDER:-(disabled)}"
-printf '  %-26s %s KB\n' "Max text"              "$MAX_TEXT_KB"
+if [[ "$MAX_TEXT_KB" == "0" ]]; then
+    printf '  %-26s %s\n' "Max text"             "0 KB (no limit, full file)"
+else
+    printf '  %-26s %s KB\n' "Max text"          "$MAX_TEXT_KB"
+fi
 printf '  %-26s %s MB\n' "Lambda memory"         "$LAMBDA_MEMORY"
 printf '  %-26s %s s\n'  "Lambda timeout"        "$LAMBDA_TIMEOUT"
 printf '  %-26s %s days\n' "Log retention"       "$LOG_RETENTION"
+printf '  %-26s %s\n'  "Tag scanned files"       "$ENABLE_TAGGING"
 printf '  %-26s %s\n'  "CloudWatch monitoring"   "$ENABLE_CW"
 
 say ""
@@ -411,6 +434,7 @@ aws cloudformation deploy \\
     LambdaMemoryMB="${LAMBDA_MEMORY}" \\
     LambdaTimeoutSeconds="${LAMBDA_TIMEOUT}" \\
     LogRetentionDays="${LOG_RETENTION}" \\
+    EnableFileTagging="${ENABLE_TAGGING}" \\
     EnableCloudWatchMonitoring="${ENABLE_CW}"
 echo "Stack deployed."
 EOF
@@ -433,6 +457,7 @@ aws cloudformation deploy \
         LambdaMemoryMB="$LAMBDA_MEMORY" \
         LambdaTimeoutSeconds="$LAMBDA_TIMEOUT" \
         LogRetentionDays="$LOG_RETENTION" \
+        EnableFileTagging="$ENABLE_TAGGING" \
         EnableCloudWatchMonitoring="$ENABLE_CW" \
     --no-fail-on-empty-changeset
 
