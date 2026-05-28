@@ -436,7 +436,7 @@ def main() -> None:
     print()
     print("  Max text sent to AI Guard per file:")
     print()
-    print("    1) 500 KB         (recommended - first 500 KB of the file)")
+    print("    1) Default        (recommended setting for this release)")
     print("    2) Full file      (no limit, send the entire content)")
     print("    3) Custom amount  (you choose how many KB)")
     print()
@@ -445,18 +445,18 @@ def main() -> None:
                           validator=lambda v: None if v in ("1", "2", "3")
                           else "Enter 1, 2, or 3.")
         if text_choice == "1":
-            max_text_kb = 500
+            max_text_kb = 50  # 50 KB = AI Guard's request payload limit
             break
         if text_choice == "2":
             max_text_kb = 0
             break
-        # Choice 3: custom value, bounded 10-2048
+        # Choice 3: custom value, bounded 10-50 (current AI Guard API ceiling)
         while True:
-            raw = input("  Cap in KB (10-2048) [500]: ").strip() or "500"
-            if raw.isdigit() and 10 <= int(raw) <= 2048:
+            raw = input("  Cap in KB (10-50) [50]: ").strip() or "50"
+            if raw.isdigit() and 10 <= int(raw) <= 50:
                 max_text_kb = int(raw)
                 break
-            print("  Enter a whole number between 10 and 2048.")
+            print("  Enter a whole number between 10 and 50.")
         break
     print()
     print("  Lambda memory (RAM ceiling + CPU speed + per-scan cost combined):")
@@ -541,7 +541,8 @@ def main() -> None:
         ("Fallback app name",      app_name),
         ("Alert recipient",        notification_email or "(disabled)"),
         ("SES sender",             ses_sender or "(disabled)"),
-        ("Max text",               "0 KB (no limit, full file)" if max_text_kb == 0 else f"{max_text_kb} KB"),
+        ("Max text",               "0 KB (no limit, full file)" if max_text_kb == 0
+                                   else ("50 KB (default)" if max_text_kb == 50 else f"{max_text_kb} KB")),
         ("Lambda memory",          f"{lambda_memory} MB"),
         ("Lambda timeout",         f"{lambda_timeout}s"),
         ("Log retention",          f"{log_retention} days"),

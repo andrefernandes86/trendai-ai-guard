@@ -317,7 +317,7 @@ If any of those still report results, repeat the corresponding step.
 | `LogBucketName` | Yes | — | Bucket for detection logs (created if absent) |
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
 | `SESVerifiedSender` | No | empty | Verified SES FROM address |
-| `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–2048 caps the payload at that many KB read from the start of the document. If the cap is larger than the file, the handler safely sends the whole file (the cap is an upper bound, not a required length). |
+| `MaxTextKB` | No | `50` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–50 caps the payload at that many KB read from the start of the document. The upper bound matches AI Guard's 50 KB request-payload limit; the client also pre-trims any oversize body so callers don't have to think about it. Chunked scanning of larger documents is on the project roadmap. |
 | `LambdaMemoryMB` | No | `512` | Lambda memory in MB (256 / 512 / 1024 / 2048). Controls RAM ceiling, CPU speed, and per-scan cost together — see [Lambda memory and cost](#lambda-memory-and-cost) for the file-size limits and projected cost at each tier. |
 | `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
 | `LogRetentionDays` | No | `90` | CloudWatch log retention in days. Must be a CloudWatch-supported value: `1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653`. |

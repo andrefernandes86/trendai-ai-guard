@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -17,6 +18,13 @@ _BACKOFF_BASE = 2  # seconds
 _APP_NAME_INVALID = re.compile(r"[^a-zA-Z0-9_-]")
 _APP_NAME_MAX_LEN = 64
 
+# AI Guard request payload hard limit (discovered empirically from the
+# server's "Payload size N bytes exceeds maximum allowed size of 51200
+# bytes" response). We pre-flight the JSON body so a caller can pass any
+# size of text and we'll trim it to fit; this is much friendlier than
+# letting Trend reject the whole scan with HTTP 413.
+MAX_API_PAYLOAD_BYTES = 51200  # 50 KB
+
 
 def sanitize_app_name(value: str, fallback: str = "ai-guard-s3-monitor") -> str:
     """
@@ -32,6 +40,36 @@ def sanitize_app_name(value: str, fallback: str = "ai-guard-s3-monitor") -> str:
     cleaned = re.sub(r"_+", "_", cleaned).strip("_-")
     cleaned = cleaned[:_APP_NAME_MAX_LEN]
     return cleaned or fallback
+
+
+def _build_payload(text: str) -> tuple[bytes, int, int]:
+    """
+    Build the JSON body for a scan, trimming the text if the encoded body
+    would exceed AI Guard's payload limit.
+
+    Uses ensure_ascii=False so non-ASCII characters keep their UTF-8 size
+    instead of expanding to \\uXXXX escapes (which used to triple the
+    size of CJK / Russian / heavily-accented text and trip HTTP 413s).
+
+    Returns (body_bytes, original_chars, sent_chars).
+    """
+    original_chars = len(text)
+    body = json.dumps({"prompt": text}, ensure_ascii=False).encode("utf-8")
+    if len(body) <= MAX_API_PAYLOAD_BYTES:
+        return body, original_chars, original_chars
+
+    # Binary-search for the longest prefix whose JSON-encoded body fits.
+    lo, hi = 0, original_chars
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        candidate = json.dumps({"prompt": text[:mid]}, ensure_ascii=False).encode("utf-8")
+        if len(candidate) <= MAX_API_PAYLOAD_BYTES:
+            lo = mid
+        else:
+            hi = mid - 1
+    trimmed = text[:lo]
+    body = json.dumps({"prompt": trimmed}, ensure_ascii=False).encode("utf-8")
+    return body, original_chars, lo
 
 
 class AIGuardClient:
@@ -51,9 +89,13 @@ class AIGuardClient:
 
         If *app_name* is provided, it overrides the client's default and is
         sanitized to satisfy the TMV1-Application-Name constraint
-        ([a-zA-Z0-9_-], max 64 chars). Useful for tagging each scan with
-        the file name it came from so the call shows up in Vision One
-        audit logs that way.
+        ([a-zA-Z0-9_-], max 64 chars).
+
+        The text is JSON-encoded with ensure_ascii=False and the body is
+        pre-flighted against AI Guard's 50 KB payload limit; if the body
+        would exceed it we binary-search for the largest prefix that fits
+        and trim before sending. Callers therefore never need to think
+        about the API limit.
         """
         effective_app_name = (
             sanitize_app_name(app_name, fallback=self.default_app_name)
@@ -63,7 +105,14 @@ class AIGuardClient:
         headers = {**self._base_headers, "TMV1-Application-Name": effective_app_name}
         logger.info("TMV1-Application-Name: %s", effective_app_name)
 
-        payload = {"prompt": text}
+        body, original_chars, sent_chars = _build_payload(text)
+        if sent_chars < original_chars:
+            logger.warning(
+                "Text trimmed in client from %d to %d chars to fit %d-byte API limit",
+                original_chars, sent_chars, MAX_API_PAYLOAD_BYTES,
+            )
+        logger.info("Outgoing AI Guard payload: %d bytes", len(body))
+
         last_exc: Exception | None = None
 
         for attempt in range(_MAX_RETRIES):
@@ -71,17 +120,14 @@ class AIGuardClient:
                 resp = requests.post(
                     self.endpoint,
                     headers=headers,
-                    json=payload,
+                    data=body,
                     timeout=30,
                 )
                 if resp.status_code in _RETRY_STATUS_CODES and attempt < _MAX_RETRIES - 1:
                     wait = _BACKOFF_BASE ** attempt
                     logger.warning(
                         "AI Guard returned %s, retrying in %ds (attempt %d/%d)",
-                        resp.status_code,
-                        wait,
-                        attempt + 1,
-                        _MAX_RETRIES,
+                        resp.status_code, wait, attempt + 1, _MAX_RETRIES,
                     )
                     time.sleep(wait)
                     continue
@@ -91,8 +137,7 @@ class AIGuardClient:
                     body_preview = (resp.text or "")[:1500]
                     logger.error(
                         "AI Guard returned %s: %s",
-                        resp.status_code,
-                        body_preview,
+                        resp.status_code, body_preview,
                     )
                 resp.raise_for_status()
                 return resp.json()

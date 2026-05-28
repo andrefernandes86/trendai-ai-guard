@@ -296,25 +296,25 @@ fi
 say ""
 say "  Max text sent to AI Guard per file:"
 say ""
-say "    1) 500 KB         (recommended - first 500 KB of the file)"
+say "    1) Default        (recommended setting for this release)"
 say "    2) Full file      (no limit, send the entire content)"
 say "    3) Custom amount  (you choose how many KB)"
 say ""
 while :; do
     TEXT_CHOICE=$(ask "Choose" "1")
     case "$TEXT_CHOICE" in
-        1) MAX_TEXT_KB=500; break ;;
-        2) MAX_TEXT_KB=0;   break ;;
+        1) MAX_TEXT_KB=50; break ;;   # 50 KB = AI Guard's request payload limit
+        2) MAX_TEXT_KB=0;  break ;;
         3)
             while :; do
-                CUSTOM_KB=$(ask "Cap in KB (10-2048)" "500")
+                CUSTOM_KB=$(ask "Cap in KB (10-50)" "50")
                 if [[ "$CUSTOM_KB" =~ ^[0-9]+$ ]] \
                    && (( CUSTOM_KB >= 10 )) \
-                   && (( CUSTOM_KB <= 2048 )); then
+                   && (( CUSTOM_KB <= 50 )); then
                     MAX_TEXT_KB=$CUSTOM_KB
                     break
                 fi
-                err "Enter a whole number between 10 and 2048."
+                err "Enter a whole number between 10 and 50."
             done
             break
             ;;
@@ -426,6 +426,8 @@ printf '  %-26s %s\n'  "Alert recipient"         "${NOTIFICATION_EMAIL:-(disable
 printf '  %-26s %s\n'  "SES sender"              "${SES_SENDER:-(disabled)}"
 if [[ "$MAX_TEXT_KB" == "0" ]]; then
     printf '  %-26s %s\n' "Max text"             "0 KB (no limit, full file)"
+elif [[ "$MAX_TEXT_KB" == "50" ]]; then
+    printf '  %-26s %s\n' "Max text"             "50 KB (default)"
 else
     printf '  %-26s %s KB\n' "Max text"          "$MAX_TEXT_KB"
 fi

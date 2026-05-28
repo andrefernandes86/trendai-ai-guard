@@ -56,7 +56,7 @@ Metadata:
       LogBucketName:            { default: "New S3 Bucket for Detection Logs  (must be globally unique)" }
       NotificationEmail:        { default: "Alert Recipient Email" }
       SESVerifiedSender:        { default: "SES Verified Sender Email" }
-      MaxTextKB:                { default: "Max Text to Scan per File (KB; 0 = no limit, otherwise 10-2048)" }
+      MaxTextKB:                { default: "Max Text to Scan per File (KB; 0 = no limit, otherwise 10-50; AI Guard limit)" }
       LambdaMemoryMB:           { default: "Lambda Memory  (MB)" }
       LambdaTimeoutSeconds:     { default: "Lambda Timeout  (seconds)" }
       LogRetentionDays:         { default: "CloudWatch Log Retention  (days)" }
@@ -157,18 +157,24 @@ Parameters:
 
   MaxTextKB:
     Type: Number
-    Default: 500
+    Default: 50
     MinValue: 0
-    MaxValue: 2048
+    MaxValue: 50
+    # The AI Guard /v3.0/aiSecurity/applyGuardrails endpoint enforces a
+    # 51,200-byte (50 KB) request-payload limit. The client also pre-
+    # flights the body and trims if the encoded JSON would exceed it, so
+    # values above 50 KB would be wasted. The upper bound here will be
+    # raised once chunked scanning lands (project roadmap).
     Description: >
       Maximum kilobytes of extracted text sent to AI Guard per file.
-      0 means "no limit" - the entire extracted text is sent (use
-      this for full-file coverage regardless of size). Otherwise pick
-      a value between 10 and 2048 KB to cap the payload at that many
-      KB read from the start of the document. If the cap is larger
-      than the file, the handler safely sends the whole file (the cap
-      is an upper bound, not a required length). Default 500 KB is
-      fast and covers most documents.
+      0 means "no limit" - the entire extracted text is sent (the
+      client will still pre-trim to stay under AI Guard's 50 KB
+      request limit). Otherwise pick a value between 10 and 50 KB to
+      cap the payload at that many KB read from the start of the
+      document. If the cap is larger than the file, the handler
+      safely sends the whole file. Default 50 KB scans the first
+      ~50 KB - chunked scanning of larger documents is on the project
+      roadmap.
 
   LambdaMemoryMB:
     Type: Number
