@@ -175,8 +175,13 @@ Parameters:
     Default: 512
     AllowedValues: [256, 512, 1024, 2048]
     Description: >
-      Lambda memory in MB. AWS allocates CPU proportionally to memory.
-      512 MB is a good default. Raise to 1024 MB if you process large PDFs frequently.
+      Lambda memory in MB. Controls RAM ceiling, CPU speed, and per-scan
+      cost together. Practical maximum file size and cost per scan
+      (us-east-1, x86_64, typical 500 KB file, excludes AI Guard API):
+        256 MB  - PDFs ~1 MB / text ~10 MB; ~$0.000003/scan; may OOM on large docs.
+        512 MB  - PDFs ~5 MB / Office ~10 MB; ~$0.000006/scan. RECOMMENDED.
+        1024 MB - PDFs ~15 MB / Office ~30 MB; ~$0.000012/scan.
+        2048 MB - PDFs ~50 MB / Office ~100 MB; ~$0.000023/scan (~4x 256).
 
   LambdaTimeoutSeconds:
     Type: Number

@@ -318,7 +318,7 @@ If any of those still report results, repeat the corresponding step.
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
 | `SESVerifiedSender` | No | empty | Verified SES FROM address |
 | `MaxTextKB` | No | `500` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–2048 caps the payload at that many KB read from the start of the document. If the cap is larger than the file, the handler safely sends the whole file (the cap is an upper bound, not a required length). |
-| `LambdaMemoryMB` | No | `512` | Lambda memory: 256 / 512 / 1024 / 2048 |
+| `LambdaMemoryMB` | No | `512` | Lambda memory in MB (256 / 512 / 1024 / 2048). Controls RAM ceiling, CPU speed, and per-scan cost together — see [Lambda memory and cost](#lambda-memory-and-cost) for the file-size limits and projected cost at each tier. |
 | `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
 | `LogRetentionDays` | No | `90` | CloudWatch log retention (7-365) |
 | `EnableFileTagging` | No | `No` | `Yes` writes a `tm-v1-aiguard` S3 object tag back to each scanned file (`no-risks-detected` or `malicious-prompt-detected`) |
@@ -354,6 +354,39 @@ The header is auto-sanitized to satisfy Trend's constraint
 (`[a-zA-Z0-9_-]`, max 64 chars). The `AIGuardAppName` parameter is now
 only used as a fallback if the bucket+file string sanitizes to empty
 (extremely rare — e.g. an empty key).
+
+---
+
+## Lambda memory and cost
+
+The `LambdaMemoryMB` parameter is **one knob with three effects** — it
+sets the RAM ceiling, scales the CPU your function gets (linearly),
+and is the main driver of per-invocation cost. The installer prompts
+you to pick a tier; here's the trade-off:
+
+| Tier | Max safe file size | Cost per scan | Cost per 10,000 scans | Notes |
+|---|---|---|---|---|
+| **256 MB** | ~1 MB PDFs / ~10 MB plain text | ~$0.000003 | ~$0.03 | Cheapest. May OOM on large PDFs or complex Office docs. |
+| **512 MB** *(recommended)* | ~5 MB PDFs / ~10 MB Office docs | ~$0.000006 | ~$0.06 | Best balance for typical mixed workloads. |
+| **1024 MB** | ~15 MB PDFs / ~30 MB Office docs | ~$0.000012 | ~$0.12 | Use when you scan large PDFs regularly. |
+| **2048 MB** | ~50 MB PDFs / ~100 MB Office docs | ~$0.000023 | ~$0.23 | ~4× the cost of 256 MB; only for very large files or lowest-latency requirements. |
+
+Caveats:
+
+- Costs are **AWS Lambda only** (us-east-1, x86_64), estimated for a
+  typical 500 KB file scan (~700 ms total: S3 GET + extraction + AI
+  Guard POST). Larger files run longer and cost more in proportion.
+- Costs **exclude** Trend Micro AI Guard API charges (priced separately
+  per scan by Trend), S3 GET / PUT requests, and CloudWatch Logs
+  storage.
+- "Max safe file size" is a rule of thumb. Files near the limit with
+  many embedded images, large tables, or complex structure may still
+  hit the RAM ceiling — bump to the next tier if you see
+  `MemoryError` or unexplained Lambda errors in CloudWatch.
+- AWS allocates CPU **proportionally to memory**: 1024 MB ≈ ⅔ of a
+  full vCPU, 1769 MB ≈ 1 full vCPU. Above ~1769 MB the CPU scaling
+  plateaus, which is why 2048 MB costs notably more without a
+  matching speed benefit for most workloads.
 
 ---
 

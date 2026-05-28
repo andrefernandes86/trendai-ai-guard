@@ -321,7 +321,38 @@ while :; do
         *) err "Please enter 1, 2, or 3." ;;
     esac
 done
-LAMBDA_MEMORY=$(ask "Lambda memory MB [256/512/1024/2048]" "512")
+say ""
+say "  Lambda memory (RAM ceiling + CPU speed + per-scan cost combined):"
+say ""
+say "    1) 256 MB    Max safe file: ~1 MB PDFs, ~10 MB plain text"
+say "                 Cost per scan: ~\$0.000003   (~\$0.03 per 10,000 scans)"
+say "                 Risk:          may OOM on large PDFs / complex Office docs"
+say ""
+say "    2) 512 MB    Max safe file: ~5 MB PDFs, ~10 MB Office docs"
+say "                 Cost per scan: ~\$0.000006   (~\$0.06 per 10,000 scans)"
+say "                 [Recommended for typical mixed workloads]"
+say ""
+say "    3) 1024 MB   Max safe file: ~15 MB PDFs, ~30 MB Office docs"
+say "                 Cost per scan: ~\$0.000012   (~\$0.12 per 10,000 scans)"
+say "                 Use when you scan large PDFs regularly."
+say ""
+say "    4) 2048 MB   Max safe file: ~50 MB PDFs, ~100 MB Office docs"
+say "                 Cost per scan: ~\$0.000023   (~\$0.23 per 10,000 scans)"
+say "                 ~4x the cost of 256 MB; only for very large files."
+say ""
+say "  Costs are AWS Lambda only (us-east-1, x86_64) and exclude AI Guard"
+say "  API charges. Estimated for a typical 500 KB file scan."
+say ""
+while :; do
+    MEM_CHOICE=$(ask "Choose" "2")
+    case "$MEM_CHOICE" in
+        1) LAMBDA_MEMORY=256;  break ;;
+        2) LAMBDA_MEMORY=512;  break ;;
+        3) LAMBDA_MEMORY=1024; break ;;
+        4) LAMBDA_MEMORY=2048; break ;;
+        *) err "Please enter 1, 2, 3, or 4." ;;
+    esac
+done
 LAMBDA_TIMEOUT=$(ask "Lambda timeout seconds (30-900)" "300")
 LOG_RETENTION=$(ask "CloudWatch log retention days" "90")
 
