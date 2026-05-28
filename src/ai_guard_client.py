@@ -32,6 +32,14 @@ _APP_NAME_MAX_LEN = 64
 # is now also in the retry set.
 MAX_API_PAYLOAD_BYTES = 51200  # 50 KB exactly (inclusive)
 
+# When a request gets retried (because of 413 / 429 / 5xx), we send a
+# smaller body on the second-and-subsequent attempts. The idea: if the
+# 413 was actually a soft rate-limit signal, sending fewer bytes per
+# attempt makes us less likely to trip whatever budget (per-second,
+# per-minute, or rolling-window) AI Guard is enforcing. The first
+# attempt still uses the caller's full text (capped at MaxTextKB).
+RETRY_TEXT_BYTES = 40 * 1024  # 40 KB UTF-8
+
 
 def sanitize_app_name(value: str, fallback: str = "ai-guard-s3-monitor") -> str:
     """
@@ -47,6 +55,16 @@ def sanitize_app_name(value: str, fallback: str = "ai-guard-s3-monitor") -> str:
     cleaned = re.sub(r"_+", "_", cleaned).strip("_-")
     cleaned = cleaned[:_APP_NAME_MAX_LEN]
     return cleaned or fallback
+
+
+def _trim_to_bytes(text: str, max_bytes: int) -> str:
+    """Trim *text* to at most *max_bytes* UTF-8 bytes, splitting on a
+    codepoint boundary (errors='ignore' drops a half-character at the
+    end if the cut falls inside a multi-byte sequence)."""
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
 def _build_payload(text: str) -> tuple[bytes, int, int]:
@@ -112,17 +130,37 @@ class AIGuardClient:
         headers = {**self._base_headers, "TMV1-Application-Name": effective_app_name}
         logger.info("TMV1-Application-Name: %s", effective_app_name)
 
-        body, original_chars, sent_chars = _build_payload(text)
+        # First attempt uses the caller's full text (already capped by
+        # the handler at MaxTextKB and trimmed to fit the API by the
+        # pre-flight in _build_payload).
+        first_body, original_chars, sent_chars = _build_payload(text)
         if sent_chars < original_chars:
             logger.warning(
                 "Text trimmed in client from %d to %d chars to fit %d-byte API limit",
                 original_chars, sent_chars, MAX_API_PAYLOAD_BYTES,
             )
-        logger.info("Outgoing AI Guard payload: %d bytes", len(body))
+        logger.info("Outgoing AI Guard payload: %d bytes", len(first_body))
+
+        # Retry attempts use a smaller body (first RETRY_TEXT_BYTES of
+        # text). Built lazily on first retry so we don't pay the cost
+        # when the first attempt succeeds.
+        retry_body: bytes | None = None
 
         last_exc: Exception | None = None
 
         for attempt in range(_MAX_RETRIES):
+            if attempt == 0:
+                body = first_body
+            else:
+                if retry_body is None:
+                    shrunk = _trim_to_bytes(text, RETRY_TEXT_BYTES)
+                    retry_body, _, _ = _build_payload(shrunk)
+                    logger.info(
+                        "Retry path: shrinking outgoing payload to first %d KB (%d bytes)",
+                        RETRY_TEXT_BYTES // 1024, len(retry_body),
+                    )
+                body = retry_body
+
             try:
                 resp = requests.post(
                     self.endpoint,
