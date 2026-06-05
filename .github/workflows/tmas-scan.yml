@@ -1,0 +1,29 @@
+name: TMAS Security Scan
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  tmas-scan:
+    name: Artifact Security Scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run TMAS Scan
+        uses: trendmicro/tmas-scan-action@v1
+        with:
+          artifact: ${{ github.workspace }}
+          vulnerabilitiesScan: "true"
+          secretsScan: "true"
+          malwareScan: "true"
+          tmasApiKey: ${{ secrets.TMAS_API_KEY }}
+          githubToken: ${{ secrets.GITHUB_TOKEN }}
