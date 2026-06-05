@@ -48,6 +48,7 @@ jobs:
           vulnerabilitiesScan: "true"
           malwareScan: "false"
           secretsScan: "false"
+          additionalArgs: "--exclude /.local"
       - name: Summarize vulnerabilities
         if: always()
         run: |
@@ -255,7 +256,7 @@ jobs:
           vulnerabilitiesScan: "true"
           malwareScan: "false"
           secretsScan: "false"
-          additionalArgs: "--saveSBOM"
+          additionalArgs: "--saveSBOM --exclude /.local"
       - name: Summarize SBOM
         if: always()
         run: |
