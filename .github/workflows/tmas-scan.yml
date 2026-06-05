@@ -27,11 +27,12 @@ jobs:
           COPY src/ ${LAMBDA_TASK_ROOT}/
           DOCKERFILE
           docker build -f Dockerfile.scan -t trendai-ai-guard:latest .
+          docker save trendai-ai-guard:latest -o image.tar
 
       - name: Run TMAS Scan
         uses: trendmicro/tmas-scan-action@v3.1.3
         with:
-          artifact: docker://trendai-ai-guard:latest
+          artifact: docker-archive:image.tar
           vulnerabilitiesScan: "true"
           secretsScan: "true"
           malwareScan: "true"
