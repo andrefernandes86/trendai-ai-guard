@@ -18,22 +18,20 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
-      - name: Build Lambda deployment package
+      - name: Build Lambda container image
         run: |
-          pip install -r src/requirements.txt -t package/
-          cp src/*.py package/
-          cd package && zip -r ../lambda.zip . && cd ..
-          echo "Built lambda.zip ($(du -sh lambda.zip | cut -f1))"
+          cat > Dockerfile.scan <<'DOCKERFILE'
+          FROM public.ecr.aws/lambda/python:3.12
+          COPY src/requirements.txt .
+          RUN pip install -r requirements.txt -t "${LAMBDA_TASK_ROOT}"
+          COPY src/ ${LAMBDA_TASK_ROOT}/
+          DOCKERFILE
+          docker build -f Dockerfile.scan -t trendai-ai-guard:${{ github.sha }} .
 
       - name: Run TMAS Scan
         uses: trendmicro/tmas-scan-action@v3.1.3
         with:
-          artifact: lambda.zip
+          artifact: docker://trendai-ai-guard:${{ github.sha }}
           vulnerabilitiesScan: "true"
           secretsScan: "true"
           malwareScan: "true"
