@@ -27,8 +27,7 @@ jobs:
           DOCKERFILE
           docker build -f Dockerfile.scan -t ${{ env.IMAGE_NAME }}:latest .
           docker save ${{ env.IMAGE_NAME }}:latest -o image.tar
-      - name: Upload image
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: docker-image
           path: image.tar
@@ -52,17 +51,58 @@ jobs:
       - name: Summarize vulnerabilities
         if: always()
         run: |
-          echo "## 🔍 Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f tmas_scan_report.json ]; then
-            echo "⚠️ No scan output. Check the TMAS vulnerability scan step log." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          CRITICAL=$(jq -r '.vulnerabilities.criticalCount // 0' tmas_scan_report.json)
-          HIGH=$(jq -r '.vulnerabilities.highCount // 0' tmas_scan_report.json)
-          MEDIUM=$(jq -r '.vulnerabilities.mediumCount // 0' tmas_scan_report.json)
-          LOW=$(jq -r '.vulnerabilities.lowCount // 0' tmas_scan_report.json)
-          printf "| Severity | Count |\n|----------|-------|\n| Critical | %s |\n| High | %s |\n| Medium | %s |\n| Low | %s |\n" \
-            "$CRITICAL" "$HIGH" "$MEDIUM" "$LOW" >> $GITHUB_STEP_SUMMARY
+          sudo apt-get install -y jq -qq
+          {
+            echo "## 🔍 Vulnerability Scan"
+            echo ""
+            if [ ! -f tmas_scan_report.json ]; then
+              echo "> ⚠️ No scan output — check the TMAS vulnerability scan step log."
+              exit 0
+            fi
+            TOTAL=$(jq -r '.vulnerabilities.totalVulnCount // 0' tmas_scan_report.json)
+            CRITICAL=$(jq -r '.vulnerabilities.criticalCount // 0' tmas_scan_report.json)
+            HIGH=$(jq -r '.vulnerabilities.highCount // 0' tmas_scan_report.json)
+            MEDIUM=$(jq -r '.vulnerabilities.mediumCount // 0' tmas_scan_report.json)
+            LOW=$(jq -r '.vulnerabilities.lowCount // 0' tmas_scan_report.json)
+            NEGLIGIBLE=$(jq -r '.vulnerabilities.negligibleCount // 0' tmas_scan_report.json)
+
+            if [ "$TOTAL" = "0" ]; then
+              echo "### ✅ No vulnerabilities found"
+            else
+              echo "### Summary"
+              echo ""
+              echo "| 🔴 Critical | 🟠 High | 🟡 Medium | 🔵 Low | ⚪ Negligible | Total |"
+              echo "|:-----------:|:-------:|:---------:|:------:|:-------------:|:-----:|"
+              echo "| $CRITICAL | $HIGH | $MEDIUM | $LOW | $NEGLIGIBLE | **$TOTAL** |"
+              echo ""
+              echo "### Findings"
+              echo ""
+              echo "| Severity | Advisory | CVE | Package | Version | CVSS | Fix | Location |"
+              echo "|----------|----------|-----|---------|---------|------|-----|----------|"
+              for SEV in Critical High Medium Low Negligible; do
+                jq -r --arg sev "$SEV" '
+                  .vulnerabilities.findings[$sev][]? |
+                  [
+                    $sev,
+                    .id,
+                    (.source // ""),
+                    ((.relatedVulnerabilities // [])[0].id // "—"),
+                    .name,
+                    .version,
+                    ((.cvssSummaries // [])[0].cvssMetrics.cvssBaseScore // "—"),
+                    (.fix // "—"),
+                    ((.locations // [])[0] // "—")
+                  ] | @tsv
+                ' tmas_scan_report.json | while IFS=$'\t' read -r sev id src cve pkg ver score fix loc; do
+                  case "$sev" in Critical) icon="🔴";; High) icon="🟠";; Medium) icon="🟡";; Low) icon="🔵";; *) icon="⚪";; esac
+                  link="[$id]($src)"
+                  [ "$src" = "" ] && link="$id"
+                  [ "$fix" = "not-fixed" ] && fix="—"
+                  echo "| $icon $sev | $link | $cve | \`$pkg\` | $ver | $score | $fix | \`$loc\` |"
+                done
+              done
+            fi
+          } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -97,28 +137,39 @@ jobs:
       - name: Summarize malware
         if: always()
         run: |
-          echo "## 🛡️ Malware Scan Results" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f tmas_scan_report.json ]; then
-            echo "⚠️ No scan output. Check the TMAS malware scan step log." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          COUNT=$(jq -r '.malware.count // 0' tmas_scan_report.json)
-          [ "$COUNT" = "null" ] && COUNT=0
-          if [ "$COUNT" -gt 0 ] 2>/dev/null; then
-            echo "❌ **$COUNT malware detection(s)**" >> $GITHUB_STEP_SUMMARY
-            echo "| File | Path | Malware |" >> $GITHUB_STEP_SUMMARY
-            echo "|------|------|---------|" >> $GITHUB_STEP_SUMMARY
-            jq -r '(.malware.findings // [])[]? | "| \(.fileName // "—") | \(.path // "—") | \(.malwareName // "—") |"' tmas_scan_report.json >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ No malware detected." >> $GITHUB_STEP_SUMMARY
-          fi
+          sudo apt-get install -y jq -qq
+          {
+            echo "## 🛡️ Malware Scan"
+            echo ""
+            if [ ! -f tmas_scan_report.json ]; then
+              echo "> ⚠️ No scan output — check the TMAS malware scan step log."
+              exit 0
+            fi
+            RESULT=$(jq -r '.malware.scanResult // 1' tmas_scan_report.json)
+            SCAN_ID=$(jq -r '.malware.scanID // "—"' tmas_scan_report.json)
+            SCANNER_VER=$(jq -r '.malware.scannerVersion // "—"' tmas_scan_report.json)
+            COUNT=$(jq -r '(.malware.findings // []) | length' tmas_scan_report.json 2>/dev/null || echo "0")
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Result | $([ "$RESULT" = "0" ] && echo "✅ Clean" || echo "❌ Malware detected") |"
+            echo "| Findings | $COUNT |"
+            echo "| Scan ID | \`$SCAN_ID\` |"
+            echo "| Scanner version | $SCANNER_VER |"
+            if [ "${COUNT:-0}" -gt 0 ] 2>/dev/null; then
+              echo ""
+              echo "### ❌ Detections"
+              echo "| File | Path | Malware name |"
+              echo "|------|------|--------------|"
+              jq -r '(.malware.findings // [])[]? | "| \(.fileName // "—") | \(.path // "—") | \(.malwareName // "—") |"' tmas_scan_report.json
+            fi
+          } >> $GITHUB_STEP_SUMMARY
       - name: Set malware status output
         id: set_status
         if: always()
         run: |
           COUNT="0"
           if [ -f tmas_scan_report.json ]; then
-            COUNT=$(jq -r '.malware.count // 0' tmas_scan_report.json 2>/dev/null || echo "0")
+            COUNT=$(jq -r '(.malware.findings // []) | length' tmas_scan_report.json 2>/dev/null || echo "0")
             [ "$COUNT" = "null" ] && COUNT=0
           fi
           FOUND="false"
@@ -152,21 +203,33 @@ jobs:
       - name: Summarize secrets
         if: always()
         run: |
-          echo "## 🔒 Secrets Scan Results" >> $GITHUB_STEP_SUMMARY
-          if [ ! -f tmas_scan_report.json ]; then
-            echo "⚠️ No scan output. Check the TMAS secrets scan step log." >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          COUNT=$(jq -r '.secrets.unmitigatedFindingsCount // 0' tmas_scan_report.json)
-          [ "$COUNT" = "null" ] && COUNT=0
-          if [ "$COUNT" -gt 0 ] 2>/dev/null; then
-            echo "❌ **$COUNT secret(s) found**" >> $GITHUB_STEP_SUMMARY
-            echo "| Rule ID | Location |" >> $GITHUB_STEP_SUMMARY
-            echo "|---------|----------|" >> $GITHUB_STEP_SUMMARY
-            jq -r '.secrets.findings.unmitigated[]? | "| \(.ruleID // "—") | \(.location.path // "—") |"' tmas_scan_report.json >> $GITHUB_STEP_SUMMARY
-          else
-            echo "✅ No secrets found." >> $GITHUB_STEP_SUMMARY
-          fi
+          sudo apt-get install -y jq -qq
+          {
+            echo "## 🔒 Secrets Scan"
+            echo ""
+            if [ ! -f tmas_scan_report.json ]; then
+              echo "> ⚠️ No scan output — check the TMAS secrets scan step log."
+              exit 0
+            fi
+            FILES=$(jq -r '.secrets.totalFilesScanned // "—"' tmas_scan_report.json)
+            COUNT=$(jq -r '.secrets.unmitigatedFindingsCount // 0' tmas_scan_report.json)
+            OVERRIDDEN=$(jq -r '.secrets.overriddenFindingsCount // 0' tmas_scan_report.json)
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| Files scanned | $FILES |"
+            echo "| Unmitigated secrets | $COUNT |"
+            echo "| Overridden / suppressed | $OVERRIDDEN |"
+            if [ "${COUNT:-0}" -gt 0 ] 2>/dev/null; then
+              echo ""
+              echo "### ❌ Findings"
+              echo "| Rule ID | File | Line |"
+              echo "|---------|------|------|"
+              jq -r '.secrets.findings.unmitigated[]? | "| \(.ruleID // .ruleId // "—") | \(.location.path // "—") | \(.location.startLine // "—") |"' tmas_scan_report.json
+            else
+              echo ""
+              echo "✅ No secrets found."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -196,12 +259,25 @@ jobs:
       - name: Summarize SBOM
         if: always()
         run: |
-          echo "## 📋 SBOM Scan Results" >> $GITHUB_STEP_SUMMARY
-          if [ -f tmas_scan_report.json ]; then
-            echo "✅ SBOM generated. Download the **sbom-scan-results** artifact for full details." >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ No SBOM output. Check the TMAS SBOM scan step log." >> $GITHUB_STEP_SUMMARY
-          fi
+          sudo apt-get install -y jq -qq
+          {
+            echo "## 📋 SBOM"
+            echo ""
+            if [ ! -f tmas_scan_report.json ]; then
+              echo "> ⚠️ No SBOM output — check the TMAS SBOM scan step log."
+              exit 0
+            fi
+            echo "✅ SBOM generated. Download the **sbom-scan-results** artifact for the full JSON."
+            SBOM_FILE=$(ls SBOM_*.json 2>/dev/null | head -1)
+            if [ -n "$SBOM_FILE" ]; then
+              COMP=$(jq '.components | length' "$SBOM_FILE" 2>/dev/null || echo "—")
+              echo ""
+              echo "| Metric | Value |"
+              echo "|--------|-------|"
+              echo "| Components | $COMP |"
+              echo "| File | \`$SBOM_FILE\` |"
+            fi
+          } >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -226,25 +302,131 @@ jobs:
         continue-on-error: true
       - name: Generate pipeline report
         run: |
+          sudo apt-get install -y jq -qq
           BUILD="${{ needs.build.result }}"
           VULN="${{ needs.vulnerabilities-scan.result }}"
           MAL="${{ needs.malware-scan.result }}"
           SEC="${{ needs.secrets-scan.result }}"
           SBOM="${{ needs.sbom-scan.result }}"
           MALWARE_FOUND="${{ needs.malware-scan.outputs.malware_found }}"
-          icon() { case "$1" in success) echo "✅";; failure) echo "❌";; skipped) echo "⏭️";; *) echo "⚠️";; esac; }
+          icon() { case "$1" in success) echo "✅";; failure) echo "❌";; skipped) echo "⏭️";; *) echo "⚠️";; esac }
+
+          VULN_JSON="scan-artifacts/vulnerability-scan-results/tmas_scan_report.json"
+          MAL_JSON="scan-artifacts/malware-scan-results/tmas_scan_report.json"
+          SEC_JSON="scan-artifacts/secrets-scan-results/tmas_scan_report.json"
+
+          # Collect stats
+          CRITICAL=0; HIGH=0; MEDIUM=0; LOW=0; TOTAL_VULNS=0
+          if [ -f "$VULN_JSON" ]; then
+            CRITICAL=$(jq -r '.vulnerabilities.criticalCount // 0' "$VULN_JSON")
+            HIGH=$(jq -r '.vulnerabilities.highCount // 0' "$VULN_JSON")
+            MEDIUM=$(jq -r '.vulnerabilities.mediumCount // 0' "$VULN_JSON")
+            LOW=$(jq -r '.vulnerabilities.lowCount // 0' "$VULN_JSON")
+            TOTAL_VULNS=$(jq -r '.vulnerabilities.totalVulnCount // 0' "$VULN_JSON")
+          fi
+          SECRETS_COUNT=0; FILES_SCANNED=0
+          if [ -f "$SEC_JSON" ]; then
+            SECRETS_COUNT=$(jq -r '.secrets.unmitigatedFindingsCount // 0' "$SEC_JSON")
+            FILES_SCANNED=$(jq -r '.secrets.totalFilesScanned // 0' "$SEC_JSON")
+          fi
+          MAL_RESULT="—"; MAL_SCANNER="—"
+          if [ -f "$MAL_JSON" ]; then
+            MAL_RESULT=$(jq -r 'if .malware.scanResult == 0 then "✅ Clean" else "❌ Detected" end' "$MAL_JSON")
+            MAL_SCANNER=$(jq -r '.malware.scannerVersion // "—"' "$MAL_JSON")
+          fi
+
+          # Overall status
+          OVERALL="✅ PASSED"
+          [ "$MALWARE_FOUND" = "true" ] && OVERALL="❌ FAILED — malware detected"
+          [ "$CRITICAL" -gt 0 ] 2>/dev/null && OVERALL="❌ FAILED — critical vulnerabilities"
+          [ "$SECRETS_COUNT" -gt 0 ] 2>/dev/null && OVERALL="⚠️ REVIEW — secrets found"
+
           {
-            echo "# 📋 TMAS Pipeline Report"
+            echo "# 📋 TMAS Security Report"
             echo ""
-            echo "| Build | Vulnerabilities | Malware | Secrets | SBOM |"
-            echo "|-------|-----------------|---------|---------|------|"
-            echo "| $(icon $BUILD) | $(icon $VULN) | $(icon $MAL) | $(icon $SEC) | $(icon $SBOM) |"
+            echo "> **$OVERALL**  ·  Commit: \`${{ github.sha }}\`  ·  Branch: \`${{ github.ref_name }}\`"
             echo ""
-            if [ "$MALWARE_FOUND" = "true" ]; then
-              echo "⛔ **Malware detected** — review malware-scan-results artifact before deploying."
+            echo "## Pipeline Status"
+            echo ""
+            echo "| Job | Status |"
+            echo "|-----|--------|"
+            echo "| 🔨 Build | $(icon $BUILD) |"
+            echo "| 🔍 Vulnerabilities | $(icon $VULN) |"
+            echo "| 🛡️ Malware | $(icon $MAL) |"
+            echo "| 🔒 Secrets | $(icon $SEC) |"
+            echo "| 📋 SBOM | $(icon $SBOM) |"
+            echo ""
+            echo "---"
+            echo "## Scan Results at a Glance"
+            echo ""
+            echo "| | Vulnerabilities | | | | Malware | Secrets |"
+            echo "|---|:---:|:---:|:---:|:---:|:---:|:---:|"
+            echo "| | 🔴 Critical | 🟠 High | 🟡 Medium | 🔵 Low | 🛡️ Result | 🔒 Found |"
+            echo "| Count | $CRITICAL | $HIGH | $MEDIUM | $LOW | $MAL_RESULT | $SECRETS_COUNT |"
+            echo ""
+            echo "---"
+            echo "## 🔍 Vulnerability Details"
+            echo ""
+            if [ -f "$VULN_JSON" ] && [ "$TOTAL_VULNS" -gt 0 ]; then
+              echo "**$TOTAL_VULNS findings** across $CRITICAL critical, $HIGH high, $MEDIUM medium, $LOW low"
+              echo ""
+              echo "| Severity | Advisory | CVE | Package | Version | CVSS | Fix | Location |"
+              echo "|----------|----------|-----|---------|---------|:----:|-----|----------|"
+              for SEV in Critical High Medium Low Negligible; do
+                jq -r --arg sev "$SEV" '
+                  .vulnerabilities.findings[$sev][]? |
+                  [
+                    $sev,
+                    .id,
+                    (.source // ""),
+                    ((.relatedVulnerabilities // [])[0].id // "—"),
+                    .name,
+                    .version,
+                    ((.cvssSummaries // [])[0].cvssMetrics.cvssBaseScore // "—"),
+                    (.fix // "—"),
+                    ((.locations // [])[0] // "—")
+                  ] | @tsv
+                ' "$VULN_JSON" | while IFS=$'\t' read -r sev id src cve pkg ver score fix loc; do
+                  case "$sev" in Critical) ico="🔴";; High) ico="🟠";; Medium) ico="🟡";; Low) ico="🔵";; *) ico="⚪";; esac
+                  [ "$src" != "" ] && advisory="[$id]($src)" || advisory="$id"
+                  [ "$fix" = "not-fixed" ] && fix="—"
+                  echo "| $ico $sev | $advisory | $cve | \`$pkg\` | $ver | $score | $fix | \`$loc\` |"
+                done
+              done
             else
-              echo "✅ No malware detected."
+              echo "✅ No vulnerabilities found."
             fi
             echo ""
-            echo "📥 **Artifacts:** \`vulnerability-scan-results\`, \`malware-scan-results\`, \`secrets-scan-results\`, \`sbom-scan-results\`"
+            echo "---"
+            echo "## 🛡️ Malware Details"
+            echo ""
+            if [ -f "$MAL_JSON" ]; then
+              MAL_ID=$(jq -r '.malware.scanID // "—"' "$MAL_JSON")
+              echo "| Result | Scan ID | Scanner version |"
+              echo "|--------|---------|-----------------|"
+              echo "| $MAL_RESULT | \`$MAL_ID\` | $MAL_SCANNER |"
+            else
+              echo "> ⚠️ No malware scan data available."
+            fi
+            echo ""
+            echo "---"
+            echo "## 🔒 Secrets Details"
+            echo ""
+            if [ -f "$SEC_JSON" ]; then
+              echo "| Files scanned | Unmitigated secrets | Overridden |"
+              echo "|:-------------:|:-------------------:|:----------:|"
+              OVR=$(jq -r '.secrets.overriddenFindingsCount // 0' "$SEC_JSON")
+              echo "| $FILES_SCANNED | $SECRETS_COUNT | $OVR |"
+              if [ "$SECRETS_COUNT" -gt 0 ] 2>/dev/null; then
+                echo ""
+                echo "| Rule ID | File | Line |"
+                echo "|---------|------|------|"
+                jq -r '.secrets.findings.unmitigated[]? | "| \(.ruleID // "—") | \(.location.path // "—") | \(.location.startLine // "—") |"' "$SEC_JSON"
+              fi
+            else
+              echo "> ⚠️ No secrets scan data available."
+            fi
+            echo ""
+            echo "---"
+            echo "_📥 Full JSON reports available in the workflow artifacts: \`vulnerability-scan-results\`, \`malware-scan-results\`, \`secrets-scan-results\`, \`sbom-scan-results\`_"
           } >> $GITHUB_STEP_SUMMARY
