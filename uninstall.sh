@@ -363,11 +363,20 @@ ORPHANS=$(aws logs describe-log-groups --region "$REGION" \
 if [[ -z "$ORPHANS" ]]; then
     ok "No orphaned CloudWatch log groups."
 else
-    warn "Orphaned CloudWatch log groups found:"
-    for lg in $ORPHANS; do
-        warn "  ${lg}"
-    done
-    warn "  Delete with: aws logs delete-log-group --log-group-name <name> --region ${REGION}"
+    warn "Orphaned CloudWatch log groups found (left behind from a previous deployment):"
+    for lg in $ORPHANS; do warn "  ${lg}"; done
+    if ask_yn "Delete these orphaned log groups?" "Y"; then
+        for lg in $ORPHANS; do
+            aws logs delete-log-group --log-group-name "$lg" --region "$REGION"
+            ok "Deleted log group: ${lg}"
+        done
+    else
+        skip "Orphaned log groups kept."
+        warn "  These will block redeployment. Delete manually:"
+        for lg in $ORPHANS; do
+            warn "    aws logs delete-log-group --log-group-name ${lg} --region ${REGION}"
+        done
+    fi
 fi
 
 printf '\n%s\n' "${BOLD}${GREEN}+============================================+${RESET}"

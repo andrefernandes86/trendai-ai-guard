@@ -336,6 +336,10 @@ Resources:
     # Name must match the FunctionName above. We use !Sub on StackName
     # (not !Ref ScannerFunction) so there is no circular dependency with
     # the Lambda function's DependsOn.
+    # DeletionPolicy: Delete ensures CFN removes this log group when the
+    # stack is destroyed, preventing name conflicts on redeploy.
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-scanner"
       RetentionInDays: !Ref LogRetentionDays
@@ -383,6 +387,8 @@ Resources:
 
   NotificationHelperLogGroup:
     Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
     Properties:
       LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-notif-helper"
       RetentionInDays: 7

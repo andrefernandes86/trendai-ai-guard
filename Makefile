@@ -19,19 +19,35 @@ configure:
 build:
 	./build.sh $(or $(STACK),ai-guard-monitor) $(or $(REGION),us-east-1)
 
-## Re-deploy using the generated cfn-deploy.sh
+## Re-deploy using the generated cfn-deploy.sh.
+## Self-sufficient: recreates the deploy bucket if missing, rebuilds and
+## uploads the Lambda package, removes orphaned log groups, then deploys.
+## Safe to run after 'make destroy' or 'make uninstall' without re-running install.sh.
 deploy:
 	./cfn-deploy.sh
 
-## Delete the CloudFormation stack. This also removes the S3 event
-## notification from the source bucket (via the helper custom resource).
-## The two S3 buckets created by the installer (deploy bucket and log
-## bucket) are NOT in the stack and must be deleted manually if desired.
-## See README -> "Uninstalling the solution" for the full teardown.
+## Delete the CloudFormation stack and remove any orphaned log groups so
+## 'make deploy' can be re-run immediately afterwards without errors.
+## The S3 buckets (deploy bucket and log bucket) are NOT deleted here;
+## run 'make uninstall' for a full teardown.
 destroy:
 	aws cloudformation delete-stack \
 	  --stack-name $(or $(STACK),ai-guard-monitor) \
 	  --region $(or $(REGION),us-east-1)
+	@echo "Waiting for stack deletion..."
+	aws cloudformation wait stack-delete-complete \
+	  --stack-name $(or $(STACK),ai-guard-monitor) \
+	  --region $(or $(REGION),us-east-1)
+	@echo "Cleaning up orphaned log groups..."
+	@aws logs describe-log-groups \
+	  --region $(or $(REGION),us-east-1) \
+	  --log-group-name-prefix "/aws/lambda/$(or $(STACK),ai-guard-monitor)-" \
+	  --query 'logGroups[].logGroupName' --output text 2>/dev/null \
+	  | tr '\t' '\n' \
+	  | grep . \
+	  | xargs -I{} aws logs delete-log-group --log-group-name {} --region $(or $(REGION),us-east-1) \
+	  || true
+	@echo "Done."
 
 ## Validate the CloudFormation template
 validate:
