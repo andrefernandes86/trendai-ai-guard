@@ -20,9 +20,10 @@ DOCUMENT_EXTENSIONS = {
     ".html", ".htm", ".rtf",
 }
 
-# MAX_TEXT_KB: 0 means "no truncation - send everything we extracted".
-# Any other positive integer is the cap in KB.
-MAX_TEXT_BYTES = int(os.environ.get("MAX_TEXT_KB", "500")) * 1024
+# Each chunk sent to AI Guard is at most 40 KB of UTF-8 text.
+# The API enforces a 50 KB JSON payload limit; 40 KB of text leaves
+# comfortable room for the JSON wrapper and any multi-byte characters.
+CHUNK_BYTES = 40 * 1024
 
 # Whether to tag the source S3 object with the scan verdict (Yes/No string
 # from the CloudFormation parameter EnableFileTagging).
@@ -32,6 +33,46 @@ ENABLE_FILE_TAGGING = os.environ.get("ENABLE_FILE_TAGGING", "No").lower() == "ye
 TAG_KEY = "tm-v1-aiguard"
 TAG_VALUE_ALLOW = "no-risks-detected"
 TAG_VALUE_BLOCK = "malicious-prompt-detected"
+
+
+def _chunk_text(text: str, chunk_size: int = CHUNK_BYTES) -> list[str]:
+    """
+    Split *text* into UTF-8-aware chunks of at most *chunk_size* bytes each.
+
+    Tries to split on a newline boundary within the last 10 % of each chunk
+    so that sentences / paragraphs are not cut mid-line. Falls back to a
+    hard byte boundary when no newline is found.
+    """
+    encoded = text.encode("utf-8")
+    if len(encoded) <= chunk_size:
+        return [text]
+
+    chunks: list[str] = []
+    offset = 0
+    total = len(encoded)
+
+    while offset < total:
+        end = min(offset + chunk_size, total)
+        slice_bytes = encoded[offset:end]
+
+        # Try to break on the last newline in the final 10 % of the slice
+        # so chunks end at a natural boundary.
+        if end < total:
+            search_start = max(0, len(slice_bytes) - chunk_size // 10)
+            nl = slice_bytes.rfind(b"\n", search_start)
+            if nl != -1:
+                slice_bytes = slice_bytes[: nl + 1]
+
+        chunk = slice_bytes.decode("utf-8", errors="ignore")
+        if not chunk:
+            # Safety: avoid infinite loop on a degenerate input
+            offset = end
+            continue
+
+        chunks.append(chunk)
+        offset += len(chunk.encode("utf-8"))
+
+    return chunks
 
 
 def lambda_handler(event, context):
@@ -67,27 +108,7 @@ def _process_file(bucket: str, key: str) -> None:
         logger.info("No text extracted from %s, skipping", key)
         return
 
-    encoded = text.encode("utf-8")
-    original_bytes = len(encoded)
-    if MAX_TEXT_BYTES == 0:
-        # No-limit mode
-        logger.info(
-            "MAX_TEXT_KB=0 - sending full %d bytes of extracted text",
-            original_bytes,
-        )
-    elif original_bytes > MAX_TEXT_BYTES:
-        # Cap is smaller than the file - truncate
-        text = encoded[:MAX_TEXT_BYTES].decode("utf-8", errors="ignore")
-        logger.info(
-            "Text truncated from %d to %d bytes (cap = %d KB)",
-            original_bytes, MAX_TEXT_BYTES, MAX_TEXT_BYTES // 1024,
-        )
-    else:
-        # Cap is larger than the file - safe no-op, send everything
-        logger.info(
-            "Sending full %d bytes of extracted text (under the %d KB cap)",
-            original_bytes, MAX_TEXT_BYTES // 1024,
-        )
+    total_bytes = len(text.encode("utf-8"))
 
     client = AIGuardClient(
         api_key=os.environ["AI_GUARD_API_KEY"],
@@ -95,43 +116,89 @@ def _process_file(bucket: str, key: str) -> None:
             "AI_GUARD_ENDPOINT",
             "https://api.xdr.trendmicro.com/v3.0/aiSecurity/applyGuardrails",
         ),
-        # Fallback name used only if the per-file sanitized name is empty.
         app_name=os.environ.get("AI_GUARD_APP_NAME", "ai-guard-s3-monitor"),
     )
 
-    # Tag each scan with "<bucket>--<basename>" so Vision One audit
-    # logs show where every scan came from. The '--' is a visual
-    # separator that survives the [a-zA-Z0-9_-] / 64-char sanitization
-    # the client applies (it only collapses underscores, not hyphens).
-    # Casing is preserved: S3 bucket names are always lowercase, but
-    # file names keep their original case so they're recognizable in
-    # the Vision One audit log.
-    result = client.scan(
-        text,
-        app_name=f"{bucket}--{os.path.basename(key)}",
-    )
-    action = result.get("action", "").lower()
-    logger.info("AI Guard action for %s: %s", key, action)
+    # Tag each scan with "<bucket>--<basename>" so Vision One audit logs show
+    # where every scan came from.
+    file_app_name = f"{bucket}--{os.path.basename(key)}"
 
-    if action == "block":
-        logger.warning("Malicious content detected in %s", key)
+    chunks = _chunk_text(text)
+    total_chunks = len(chunks)
+
+    if total_chunks == 1:
+        logger.info("Scanning %s (%d bytes, single chunk)", key, total_bytes)
+    else:
+        logger.info(
+            "Scanning %s in %d chunks of up to %d KB each (%d bytes total)",
+            key, total_chunks, CHUNK_BYTES // 1024, total_bytes,
+        )
+
+    # Scan every chunk regardless of intermediate verdicts so we know exactly
+    # which parts of the file are malicious.
+    chunk_results: list[dict] = []
+    overall_action = "allow"
+
+    for idx, chunk in enumerate(chunks, 1):
+        chunk_bytes = len(chunk.encode("utf-8"))
+        logger.info("Scanning chunk %d/%d (%d bytes)...", idx, total_chunks, chunk_bytes)
+
+        result = client.scan(chunk, app_name=file_app_name)
+        action = result.get("action", "").lower()
+
+        chunk_results.append({
+            "chunk": idx,
+            "total_chunks": total_chunks,
+            "bytes": chunk_bytes,
+            "action": action,
+            "result": result,
+        })
+
+        logger.info("AI Guard action for %s chunk %d/%d: %s", key, idx, total_chunks, action)
+
+        if action == "block":
+            overall_action = "block"
+            logger.warning(
+                "Malicious content detected in %s (chunk %d/%d)",
+                key, idx, total_chunks,
+            )
+
+    logger.info(
+        "AI Guard overall action for %s: %s (%d/%d chunks blocked)",
+        key, overall_action,
+        sum(1 for c in chunk_results if c["action"] == "block"),
+        total_chunks,
+    )
+
+    if overall_action == "block":
+        # Use the first blocking chunk's result as the primary scan_result for
+        # the log entry; full per-chunk breakdown is stored alongside it.
+        primary_result = next(c["result"] for c in chunk_results if c["action"] == "block")
+        first_blocked_chunk = next(c for c in chunk_results if c["action"] == "block")
+        snippet_start = sum(
+            c["bytes"] for c in chunk_results if c["chunk"] < first_blocked_chunk["chunk"]
+        )
+        text_snippet = text[snippet_start: snippet_start + 2000]
+
         save_log_to_s3(
             s3_client=s3_client,
             log_bucket=os.environ["LOG_BUCKET_NAME"],
             file_name=key,
             file_hash=file_hash,
-            scan_result=result,
-            text_snippet=text[:2000],
+            scan_result=primary_result,
+            text_snippet=text_snippet,
+            chunk_results=chunk_results,
         )
         send_email_notification(
             recipient=os.environ["NOTIFICATION_EMAIL"],
             file_name=key,
             file_hash=file_hash,
-            scan_result=result,
+            scan_result=primary_result,
+            chunk_results=chunk_results,
         )
 
     if ENABLE_FILE_TAGGING:
-        _tag_object_with_verdict(bucket, key, action)
+        _tag_object_with_verdict(bucket, key, overall_action)
 
 
 def _tag_object_with_verdict(bucket: str, key: str, action: str) -> None:

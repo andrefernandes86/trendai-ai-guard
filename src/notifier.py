@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -16,9 +18,12 @@ def save_log_to_s3(
     file_hash: str,
     scan_result: dict,
     text_snippet: str,
+    chunk_results: list[dict] | None = None,
 ) -> None:
     """Write a JSON detection log to the secondary S3 bucket."""
     timestamp = datetime.now(timezone.utc).isoformat()
+    total_chunks = chunk_results[0]["total_chunks"] if chunk_results else 1
+    blocked_chunks = [c for c in (chunk_results or []) if c.get("action") == "block"]
 
     entry = {
         "timestamp": timestamp,
@@ -26,6 +31,16 @@ def save_log_to_s3(
         "file_hash_sha256": file_hash,
         "scan_id": scan_result.get("id"),
         "action": scan_result.get("action"),
+        "chunks_scanned": total_chunks,
+        "chunks_blocked": len(blocked_chunks),
+        "chunk_breakdown": [
+            {
+                "chunk": c["chunk"],
+                "bytes": c["bytes"],
+                "action": c["action"],
+            }
+            for c in (chunk_results or [])
+        ],
         "reasons": scan_result.get("reasons", []),
         "harmful_content": _harmful_categories(scan_result),
         "sensitive_information_rules": _sensitive_rules(scan_result),
@@ -57,6 +72,7 @@ def send_email_notification(
     file_name: str,
     file_hash: str,
     scan_result: dict,
+    chunk_results: list[dict] | None = None,
 ) -> None:
     """Send an SES alert email to *recipient*. No-ops if recipient is empty."""
     if not recipient:
@@ -70,6 +86,8 @@ def send_email_notification(
     sensitive = _sensitive_rules(scan_result)
     prompt_attack = _prompt_attack_detected(scan_result)
     basename = os.path.basename(file_name)
+    total_chunks = chunk_results[0]["total_chunks"] if chunk_results else 1
+    blocked_chunks = [c for c in (chunk_results or []) if c.get("action") == "block"]
 
     subject = f"[AI Guard Alert] Malicious content detected: {basename}"
 
@@ -80,10 +98,19 @@ def send_email_notification(
         f"File Name : {file_name}",
         f"SHA-256   : {file_hash}",
         f"Scan ID   : {scan_result.get('id', 'N/A')}",
-        f"Action    : {str(scan_result.get('action', 'N/A')).upper()}",
+        f"Action    : BLOCK",
+        f"Chunks    : {len(blocked_chunks)} of {total_chunks} blocked",
         "",
-        "Detection Reasons:",
     ]
+
+    if total_chunks > 1:
+        lines.append("Chunk Breakdown:")
+        for c in (chunk_results or []):
+            status = "BLOCK" if c["action"] == "block" else "allow"
+            lines.append(f"  chunk {c['chunk']:>3}/{total_chunks}  {c['bytes']:>6} bytes  {status}")
+        lines.append("")
+
+    lines.append("Detection Reasons:")
     for reason in reasons:
         msg = reason.get("message", str(reason)) if isinstance(reason, dict) else str(reason)
         lines.append(f"  - {msg}")
