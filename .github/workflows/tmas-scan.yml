@@ -46,6 +46,10 @@ jobs:
           path: |
             image.tar
             image-src.tar
+          # Only needed to pass images to downstream scan jobs within this run.
+          # 1 day avoids accumulating hundreds of MB of Docker layers in
+          # Actions storage across runs (free tier is only 0.5 GB).
+          retention-days: 1
 
   vulnerabilities-scan:
     name: vulnerabilities-scan
