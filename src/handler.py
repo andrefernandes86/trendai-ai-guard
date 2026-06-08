@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import os
+from urllib.parse import unquote_plus
 
 import boto3
 
@@ -36,7 +37,9 @@ TAG_VALUE_BLOCK = "malicious-prompt-detected"
 def lambda_handler(event, context):
     for record in event.get("Records", []):
         bucket = record["s3"]["bucket"]["name"]
-        key = record["s3"]["object"]["key"]
+        # S3 event notifications URL-encode the object key (spaces → '+',
+        # special chars → '%xx'). Decode back to the real key before use.
+        key = unquote_plus(record["s3"]["object"]["key"])
         ext = os.path.splitext(key.lower())[1]
         if ext not in DOCUMENT_EXTENSIONS:
             logger.info("Skipping non-document file: %s", key)
