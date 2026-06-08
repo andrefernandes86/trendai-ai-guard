@@ -18,7 +18,6 @@ set -euo pipefail
 
 # ── Constants ────────────────────────────────────────────────────────────────
 
-STACK_NAME="ai-guard-monitor"
 LAMBDA_S3_KEY="lambda/package.zip"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_FILE="${SCRIPT_DIR}/template.yaml"
@@ -154,15 +153,42 @@ check_prereqs
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 say "AWS Account: ${BOLD}${ACCOUNT_ID}${RESET}"
 
-# ── 1/5  Region ──────────────────────────────────────────────────────────────
-header "1/5  AWS Region"
+# ── 1/6  Stack name ──────────────────────────────────────────────────────────
+header "1/6  Deployment Name"
+
+# Generate a random 6-char suffix so multiple instances can coexist in the
+# same account without resource name collisions (IAM roles, Lambdas, log
+# groups, and the deploy bucket all derive their names from the stack name).
+RAND_SUFFIX=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom | head -c6 2>/dev/null || \
+              openssl rand -hex 3)
+DEFAULT_STACK_NAME="ai-guard-monitor-${RAND_SUFFIX}"
+
+say "  Each deployment gets a unique name so you can run multiple monitors"
+say "  in the same account (e.g. one per business unit or S3 bucket)."
+say "  Accept the suggested name or enter your own (letters, numbers, hyphens)."
+say ""
+while true; do
+    STACK_NAME=$(ask "Deployment name (CloudFormation stack name)" "$DEFAULT_STACK_NAME")
+    if [[ "$STACK_NAME" =~ ^[a-zA-Z][a-zA-Z0-9-]{1,126}[a-zA-Z0-9]$ ]]; then
+        break
+    else
+        err "Invalid name. Use letters, numbers and hyphens; must start with a letter."
+    fi
+done
+DEPLOY_BUCKET="${STACK_NAME}-deploy-${ACCOUNT_ID}"
+say ""
+say "  Stack name    : ${BOLD}${STACK_NAME}${RESET}"
+say "  Deploy bucket : ${BOLD}${DEPLOY_BUCKET}${RESET}"
+
+# ── 2/6  Region ──────────────────────────────────────────────────────────────
+header "2/6  AWS Region"
 
 DEFAULT_REGION=$(aws configure get region 2>/dev/null || true)
 DEFAULT_REGION="${DEFAULT_REGION:-us-east-1}"
 REGION=$(ask "AWS region" "$DEFAULT_REGION")
 
-# ── 2/5  Source bucket ───────────────────────────────────────────────────────
-header "2/5  Source S3 Bucket (existing bucket to monitor)"
+# ── 3/6  Source bucket ───────────────────────────────────────────────────────
+header "3/6  Source S3 Bucket (existing bucket to monitor)"
 
 say "Fetching buckets in ${REGION}..."
 
@@ -201,8 +227,8 @@ else
 fi
 say "Source bucket: ${BOLD}${SOURCE_BUCKET}${RESET}"
 
-# ── 3/5  Log bucket ──────────────────────────────────────────────────────────
-header "3/5  Log Bucket (pick existing or create new)"
+# ── 4/6  Log bucket ──────────────────────────────────────────────────────────
+header "4/6  Log Bucket (pick existing or create new)"
 
 # Filter the source bucket out of the choice list - using it as the log
 # target would self-trigger the scanner on every log write.
@@ -247,8 +273,8 @@ else
 fi
 say "Log bucket: ${BOLD}${LOG_BUCKET}${RESET}"
 
-# ── 4/5  AI Guard ────────────────────────────────────────────────────────────
-header "4/5  Trend Micro AI Guard"
+# ── 5/6  AI Guard ────────────────────────────────────────────────────────────
+header "5/6  Trend Micro AI Guard"
 
 say "Get your API key from: Vision One Console -> Administration -> API Keys"
 while :; do
@@ -280,8 +306,8 @@ say "  Note: each scan is tagged as '<bucket>--<file>' automatically."
 say "  This 'Application name' is only used as a fallback identifier."
 APP_NAME=$(ask "Fallback application name" "ai-guard-s3-monitor")
 
-# ── 5/5  Settings ────────────────────────────────────────────────────────────
-header "5/5  Notifications & Tuning"
+# ── 6/6  Settings ────────────────────────────────────────────────────────────
+header "6/6  Notifications & Tuning"
 
 NOTIFICATION_EMAIL=$(ask "Alert recipient email (blank to disable)" "")
 SES_SENDER=""
@@ -410,12 +436,10 @@ else
     ENABLE_CW="No"
 fi
 
-# Derived
-DEPLOY_BUCKET="${STACK_NAME}-deploy-${ACCOUNT_ID}"
-
 # ── Summary ──────────────────────────────────────────────────────────────────
 header "Summary"
 
+printf '  %-26s %s\n'  "Stack name"              "$STACK_NAME"
 printf '  %-26s %s\n'  "Region"                  "$REGION"
 printf '  %-26s %s\n'  "Source bucket"           "$SOURCE_BUCKET"
 printf '  %-26s %s\n'  "Log bucket"              "$LOG_BUCKET"
@@ -517,7 +541,7 @@ fi
 # Save a re-runnable deploy script that mirrors every pre-deployment step
 # install.sh performs, so it works correctly on a fresh machine or after
 # uninstall.sh has deleted the deploy bucket.
-DEPLOY_SCRIPT="${SCRIPT_DIR}/cfn-deploy.sh"
+DEPLOY_SCRIPT="${SCRIPT_DIR}/cfn-deploy-${STACK_NAME}.sh"
 ACCOUNT_AT_INSTALL=$(aws sts get-caller-identity --query Account --output text)
 cat > "$DEPLOY_SCRIPT" <<'SCRIPT_EOF'
 #!/usr/bin/env bash
@@ -678,6 +702,6 @@ say "  aws logs tail /aws/lambda/${STACK_NAME}-scanner --region ${REGION} --foll
 say ""
 say "Test it - upload a document to s3://${SOURCE_BUCKET}/ and watch the logs."
 say ""
-say "Re-deploy to change config: ./cfn-deploy.sh"
+say "Re-deploy to change config: ./cfn-deploy-${STACK_NAME}.sh"
 say "Update Lambda code:         make build"
 say ""

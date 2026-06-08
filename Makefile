@@ -19,12 +19,13 @@ configure:
 build:
 	./build.sh $(or $(STACK),ai-guard-monitor) $(or $(REGION),us-east-1)
 
-## Re-deploy using the generated cfn-deploy.sh.
+## Re-deploy a specific stack instance using its generated cfn-deploy-<name>.sh.
 ## Self-sufficient: recreates the deploy bucket if missing, rebuilds and
 ## uploads the Lambda package, removes orphaned log groups, then deploys.
 ## Safe to run after 'make destroy' or 'make uninstall' without re-running install.sh.
+## Usage: make deploy STACK=ai-guard-monitor-x4k9m2
 deploy:
-	./cfn-deploy.sh
+	./cfn-deploy-$(or $(STACK),$(shell ls cfn-deploy-*.sh 2>/dev/null | head -1 | sed 's/cfn-deploy-//;s/\.sh//')).sh
 
 ## Delete the CloudFormation stack and remove any orphaned log groups so
 ## 'make deploy' can be re-run immediately afterwards without errors.

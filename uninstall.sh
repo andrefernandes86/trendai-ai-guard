@@ -307,8 +307,9 @@ fi
 header "Step 5/5  Local helper files"
 
 LOCAL_FILES=()
-[[ -f "${SCRIPT_DIR}/cfn-deploy.sh"        ]] && LOCAL_FILES+=("${SCRIPT_DIR}/cfn-deploy.sh")
-[[ -f "${SCRIPT_DIR}/cfn-parameters.json"  ]] && LOCAL_FILES+=("${SCRIPT_DIR}/cfn-parameters.json")
+[[ -f "${SCRIPT_DIR}/cfn-deploy.sh"                    ]] && LOCAL_FILES+=("${SCRIPT_DIR}/cfn-deploy.sh")
+[[ -f "${SCRIPT_DIR}/cfn-deploy-${STACK_NAME}.sh"      ]] && LOCAL_FILES+=("${SCRIPT_DIR}/cfn-deploy-${STACK_NAME}.sh")
+[[ -f "${SCRIPT_DIR}/cfn-parameters.json"              ]] && LOCAL_FILES+=("${SCRIPT_DIR}/cfn-parameters.json")
 
 if [[ ${#LOCAL_FILES[@]} -eq 0 ]]; then
     skip "No local helper files to remove."

@@ -1,6 +1,7 @@
 # Secrets - never commit
 .env
 cfn-deploy.sh
+cfn-deploy-*.sh
 cfn-parameters.json
 *.pem
 *.key
