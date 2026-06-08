@@ -28,7 +28,7 @@ jobs:
           # the Lambda base image. TMAS returns 'status unknown' for this .so
           # and aborts the malware scan with exit code 1. It is not needed by
           # our Lambda function — remove it from the scan image only.
-          RUN find /var/lang/lib/python3.12/lib-dynload -name "_xxtestfuzz*.so" -delete
+          RUN python3 -c "import glob, os; [os.remove(f) for f in glob.glob('/var/lang/lib/python3.12/lib-dynload/_xxtestfuzz*.so')]"
           DOCKERFILE
           docker build -f Dockerfile.scan -t ${{ env.IMAGE_NAME }}:latest .
           docker save ${{ env.IMAGE_NAME }}:latest -o image.tar
