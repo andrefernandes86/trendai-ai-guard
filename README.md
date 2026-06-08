@@ -6,6 +6,10 @@ extracts text from each file, scans it with
 and on a detection sends an email alert and writes a structured JSON log to a
 second S3 bucket.
 
+Multiple independent instances can run in the same AWS account — each
+deployment gets a unique name so IAM roles, Lambdas, log groups, and S3
+buckets never collide.
+
 ---
 
 ## Architecture
@@ -17,15 +21,20 @@ Existing S3 bucket   (s3:ObjectCreated:* — wired automatically by the stack)
    Scanner Lambda     (Python 3.12 / x86_64)
    |  1. Download object from S3
    |  2. Extract text (PDF / DOCX / XLSX / PPTX / TXT / CSV / RTF / ...)
-   |  3. Truncate to first N KB (configurable, default 500)
-   |  4. SHA-256 hash the file
-   |  5. POST text to Trend Micro AI Guard
-   |  6. If action == "Block":
+   |  3. SHA-256 hash the file
+   |  4. Split text into sequential 40 KB chunks
+   |  5. POST each chunk to Trend Micro AI Guard (all chunks always scanned)
+   |  6. If any chunk action == "Block":
    |       - PUT JSON detection log -> Log S3 bucket (logs/YYYY/MM/DD/)
-   |       - Send SES email alert
+   |         (includes per-chunk verdict breakdown)
+   |       - Send SES email alert (with chunk-level summary)
    v
 [Optional] CloudWatch Dashboard + alarms (Lambda errors, blocked detections)
 ```
+
+Files smaller than 40 KB are sent as a single chunk. Larger files are split
+on newline boundaries where possible, so every byte of every document is
+scanned regardless of file size.
 
 ### Supported file types
 
@@ -56,6 +65,10 @@ things that must happen *before* the stack runs:
 Only then does it call `aws cloudformation deploy`. If you try to deploy the
 template directly via the AWS Console wizard, the stack will fail with
 `NoSuchBucket` because steps 1-3 were skipped.
+
+The generated `cfn-deploy-<stack-name>.sh` re-runs all three steps automatically
+before calling CloudFormation, so it is safe to run after an uninstall or on a
+fresh machine without re-running the full interactive installer.
 
 ---
 
@@ -95,15 +108,16 @@ pip3 install boto3
 python3 configure.py
 ```
 
-Either way, the installer walks you through five sections:
+Either way, the installer walks you through six sections:
 
 | Section | What it asks |
 |---|---|
-| 1/5 — Region | AWS region (defaults to your CLI default) |
-| 2/5 — Source bucket | Numbered picker of S3 buckets in that region |
-| 3/5 — Log bucket | Name of the bucket where detection logs will go |
-| 4/5 — AI Guard | API key (hidden), endpoint region (US/EU/AU/JP/SG), app name |
-| 5/5 — Notifications & tuning | Alert email (optional), SES sender, memory, timeout, log retention, monitoring toggle |
+| 1/6 — Deployment name | Stack name with a random suffix (e.g. `ai-guard-monitor-x4k9m2`). Accept the default or type your own label. Each deployment gets a unique name so multiple instances can coexist in the same account. |
+| 2/6 — Region | AWS region (defaults to your CLI default) |
+| 3/6 — Source bucket | Numbered picker of S3 buckets in that region |
+| 4/6 — Log bucket | Name of the bucket where detection logs will go |
+| 5/6 — AI Guard | API key (hidden), endpoint region (US/EU/AU/JP/SG), app name |
+| 6/6 — Notifications & tuning | Alert email (optional), SES sender, memory, timeout, log retention, monitoring toggle |
 
 It then runs four automated steps:
 
@@ -114,7 +128,27 @@ Step 3/4  Prepare log bucket               (creates or reuses)
 Step 4/4  Deploy CloudFormation stack      (~2-3 min)
 ```
 
-It also writes a re-runnable `cfn-deploy.sh` for future configuration changes.
+It also writes a re-runnable `cfn-deploy-<stack-name>.sh` for future
+configuration changes and redeployments.
+
+### Multiple deployments in the same account
+
+Because every resource name is derived from the stack name, you can install as
+many independent monitors as you need — one per business unit, one per source
+bucket, etc.:
+
+```bash
+./install.sh   # first run  → ai-guard-monitor-x4k9m2
+./install.sh   # second run → ai-guard-monitor-r7nq19
+```
+
+Each run produces its own `cfn-deploy-<stack-name>.sh`. To update or destroy a
+specific instance, pass its stack name to `uninstall.sh` or `make`:
+
+```bash
+./uninstall.sh ai-guard-monitor-x4k9m2 us-east-1
+make destroy STACK=ai-guard-monitor-r7nq19
+```
 
 ---
 
@@ -125,7 +159,7 @@ It also writes a re-runnable `cfn-deploy.sh` for future configuration changes.
 ```bash
 aws ses verify-email-identity \
   --email-address your-sender@example.com \
-  --region us-east-1
+  --region <region>
 ```
 
 Then click the verification link AWS emails to that address.
@@ -136,7 +170,8 @@ Then click the verification link AWS emails to that address.
 
 ### Test it
 
-Upload a benign file and something obviously malicious:
+Upload a benign file and something obviously malicious (replace `<stack-name>`
+and `<source-bucket>` with your values):
 
 ```bash
 echo "ordinary report content" > /tmp/clean.txt
@@ -149,7 +184,7 @@ aws s3 cp /tmp/malicious.txt s3://<source-bucket>/malicious.txt
 Then tail the scanner logs (give it ~15 seconds):
 
 ```bash
-aws logs tail /aws/lambda/ai-guard-monitor-scanner --region <region> --follow
+aws logs tail /aws/lambda/<stack-name>-scanner --region <region> --follow
 ```
 
 The malicious upload should produce `Malicious content detected`, an email
@@ -161,12 +196,12 @@ alert, and a JSON file under `s3://<log-bucket>/logs/YYYY/MM/DD/`.
 
 | Task | Command |
 |---|---|
-| Update Lambda code after editing `src/*.py` | `make build` |
-| Change a config value (memory, timeout, email, ...) | edit `cfn-deploy.sh` then `./cfn-deploy.sh` |
-| View stack outputs | `aws cloudformation describe-stacks --stack-name ai-guard-monitor --query 'Stacks[0].Outputs' --output table` |
+| Update Lambda code after editing `src/*.py` | `make build STACK=<stack-name>` |
+| Change a config value (memory, timeout, email, ...) | edit `cfn-deploy-<stack-name>.sh` then `./cfn-deploy-<stack-name>.sh` |
+| View stack outputs | `aws cloudformation describe-stacks --stack-name <stack-name> --query 'Stacks[0].Outputs' --output table` |
 | List detection logs | `aws s3 ls s3://<log-bucket>/logs/ --recursive` |
-| Delete the stack only (keeps buckets) | `make destroy` |
-| **Fully uninstall everything** | `./uninstall.sh` or `make uninstall` — see [Uninstalling the solution](#uninstalling-the-solution) below |
+| Delete the stack only (keeps buckets) | `make destroy STACK=<stack-name>` |
+| **Fully uninstall everything** | `./uninstall.sh <stack-name> <region>` or `make uninstall` — see [Uninstalling the solution](#uninstalling-the-solution) below |
 
 ---
 
@@ -176,19 +211,20 @@ What the installer puts into your AWS account:
 
 | # | Resource | Created by | Removed by |
 |---|---|---|---|
-| 1 | CloudFormation stack `ai-guard-monitor` (Lambda, IAM roles, log groups, alarms, dashboard) | CloudFormation | `aws cloudformation delete-stack` |
+| 1 | CloudFormation stack `<stack-name>` (Lambda, IAM roles, log groups, alarms, dashboard) | CloudFormation | `aws cloudformation delete-stack` |
 | 2 | S3 event-notification on your **source bucket** | The stack's custom resource | `aws cloudformation delete-stack` (the custom resource cleans itself up) |
 | 3 | Lambda deployment bucket `<stack-name>-deploy-<account-id>` | The installer, via boto3 | Manual / `uninstall.sh` |
 | 4 | Log bucket (only if it didn't exist before install) | The installer, via boto3 | Manual / `uninstall.sh` |
 | 5 | SES verified sender identity | You, via `aws ses verify-email-identity` | Manual / `uninstall.sh` |
-| 6 | Local helper files: `cfn-deploy.sh`, `cfn-parameters.json` | The installer | Manual / `uninstall.sh` |
+| 6 | Local helper files: `cfn-deploy-<stack-name>.sh`, `cfn-parameters.json` | The installer | Manual / `uninstall.sh` |
 
 ### Recommended: use the uninstaller
 
 ```bash
-./uninstall.sh                  # uses defaults: ai-guard-monitor / us-east-1
-./uninstall.sh my-stack us-east-2
-# or:
+./uninstall.sh <stack-name> <region>
+# e.g.:
+./uninstall.sh ai-guard-monitor-x4k9m2 us-east-1
+# or with defaults (ai-guard-monitor / us-east-1):
 make uninstall
 ```
 
@@ -197,7 +233,8 @@ confirmation for each one. The **log bucket** prompts twice (you have
 to type `y` to a "are you ABSOLUTELY sure?" check) because it contains
 your detection history. At the end it verifies that the stack, the
 deploy bucket, the source-bucket notification, and any CloudWatch log
-groups for the stack are gone.
+groups for the stack are gone (and offers to delete any orphaned log
+groups it finds).
 
 ### Manual teardown (alternative)
 
@@ -211,7 +248,7 @@ dashboard and alarms, **and** the S3 event notification on your source
 bucket (the custom-resource Lambda runs on Delete and cleans it up).
 
 ```bash
-STACK=ai-guard-monitor
+STACK=ai-guard-monitor-x4k9m2
 REGION=us-east-1
 
 aws cloudformation delete-stack --stack-name "$STACK" --region "$REGION"
@@ -278,7 +315,7 @@ key. Remove it.
 
 ```bash
 cd /path/to/trendai-ai-guard
-rm -f cfn-deploy.sh cfn-parameters.json
+rm -f cfn-deploy-*.sh cfn-parameters.json
 ```
 
 ### Verifying nothing was missed
@@ -288,17 +325,17 @@ footprint in your account:
 
 ```bash
 # Stack should be gone
-aws cloudformation describe-stacks --stack-name ai-guard-monitor --region "$REGION" 2>&1 | grep -q "does not exist" && echo "[OK] stack gone"
+aws cloudformation describe-stacks --stack-name "$STACK" --region "$REGION" 2>&1 | grep -q "does not exist" && echo "[OK] stack gone"
 
 # Deploy bucket should be gone
 aws s3 ls | grep -q "${STACK}-deploy-${ACCOUNT}" && echo "[!] deploy bucket still present" || echo "[OK] deploy bucket gone"
 
 # Source bucket should have no Lambda notification pointing at our function
 aws s3api get-bucket-notification-configuration --bucket <your-source-bucket> --region "$REGION" \
-  --query 'LambdaFunctionConfigurations[?contains(LambdaFunctionArn, `ai-guard-monitor-scanner`)]' --output table
+  --query "LambdaFunctionConfigurations[?contains(LambdaFunctionArn, \`${STACK}-scanner\`)]" --output table
 
 # CloudWatch log groups should be gone
-aws logs describe-log-groups --region "$REGION" --log-group-name-prefix /aws/lambda/ai-guard-monitor \
+aws logs describe-log-groups --region "$REGION" --log-group-name-prefix /aws/lambda/${STACK} \
   --query 'logGroups[].logGroupName' --output table
 ```
 
@@ -317,9 +354,9 @@ If any of those still report results, repeat the corresponding step.
 | `LogBucketName` | Yes | — | Bucket for detection logs (created if absent) |
 | `NotificationEmail` | No | empty (disabled) | Alert recipient |
 | `SESVerifiedSender` | No | empty | Verified SES FROM address |
-| `MaxTextKB` | No | `50` | Max KB of extracted text per scan. **`0` = no limit (send the full file's text).** Otherwise 10–50 caps the payload at that many KB read from the start of the document. The upper bound matches AI Guard's 50 KB request-payload limit; the client also pre-trims any oversize body so callers don't have to think about it. Chunked scanning of larger documents is on the project roadmap. |
+| `MaxTextKB` | No | `50` | Maximum KB of extracted text to scan per file. `0` = no limit (scan the full file). Any other value caps the total text extracted before chunking. With chunking now implemented, `0` is recommended for complete coverage. |
 | `LambdaMemoryMB` | No | `512` | Lambda memory in MB (256 / 512 / 1024 / 2048). Controls RAM ceiling, CPU speed, and per-scan cost together — see [Lambda memory and cost](#lambda-memory-and-cost) for the file-size limits and projected cost at each tier. |
-| `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900) |
+| `LambdaTimeoutSeconds` | No | `300` | Lambda timeout (30-900). For large files scanned in many chunks, increase this if you see timeouts. |
 | `LogRetentionDays` | No | `90` | CloudWatch log retention in days. Must be a CloudWatch-supported value: `1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1827, 2192, 2557, 2922, 3288, 3653`. |
 | `EnableFileTagging` | No | `No` | `Yes` writes a `tm-v1-aiguard` S3 object tag back to each scanned file (`no-risks-detected` or `malicious-prompt-detected`) |
 | `EnableCloudWatchMonitoring` | No | `No` | `Yes` adds dashboard + alarms |
@@ -347,13 +384,10 @@ TMV1-Application-Name: demo-v1-fs-upload--Report-Q3_pdf
 The `--` between the bucket name and the file name is a visual
 separator (the header only permits `[a-zA-Z0-9_-]`, so this is the
 most readable divider that survives sanitization). The original file
-name casing is preserved so the tag is easy to recognize in Vision
-One.
+name casing is preserved so the tag is easy to recognize in Vision One.
 
-The header is auto-sanitized to satisfy Trend's constraint
-(`[a-zA-Z0-9_-]`, max 64 chars). The `AIGuardAppName` parameter is now
-only used as a fallback if the bucket+file string sanitizes to empty
-(extremely rare — e.g. an empty key).
+When a file is split into multiple chunks, all chunks share the same
+`TMV1-Application-Name` so they group together in Vision One audit logs.
 
 ---
 
@@ -370,6 +404,12 @@ you to pick a tier; here's the trade-off:
 | **512 MB** *(recommended)* | ~5 MB PDFs / ~10 MB Office docs | ~$0.000006 | ~$0.06 | Best balance for typical mixed workloads. |
 | **1024 MB** | ~15 MB PDFs / ~30 MB Office docs | ~$0.000012 | ~$0.12 | Use when you scan large PDFs regularly. |
 | **2048 MB** | ~50 MB PDFs / ~100 MB Office docs | ~$0.000023 | ~$0.23 | ~4× the cost of 256 MB; only for very large files or lowest-latency requirements. |
+
+> **Note on chunking and cost:** with chunked scanning, a file that produces
+> N chunks makes N separate API calls to AI Guard. Lambda execution time
+> scales roughly linearly with chunk count. The AWS Lambda cost above is
+> per-invocation (per file), not per chunk; AI Guard API charges are per
+> scan call and are priced separately by Trend Micro.
 
 Caveats:
 
@@ -393,13 +433,13 @@ Caveats:
 ## Optional feature: S3 object tagging
 
 When `EnableFileTagging=Yes` (you can turn this on during install or by
-editing `cfn-deploy.sh` and re-running it), the Lambda writes an S3
+editing `cfn-deploy-<stack-name>.sh` and re-running it), the Lambda writes an S3
 object tag back onto each scanned file in the source bucket:
 
 | Verdict | Tag value |
 |---|---|
-| AI Guard allowed | `tm-v1-aiguard = no-risks-detected` |
-| AI Guard blocked | `tm-v1-aiguard = malicious-prompt-detected` |
+| AI Guard allowed all chunks | `tm-v1-aiguard = no-risks-detected` |
+| AI Guard blocked any chunk | `tm-v1-aiguard = malicious-prompt-detected` |
 
 The Lambda **merges** with whatever tags are already on the object —
 only the `tm-v1-aiguard` key is added or updated; everything else is
@@ -436,13 +476,27 @@ Files are written to `s3://<log-bucket>/logs/YYYY/MM/DD/<filename>_<timestamp>.j
   "file_hash_sha256": "e3b0c44298fc1c149afbf4c8996fb924...",
   "scan_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
   "action": "Block",
+  "chunks_scanned": 3,
+  "chunks_blocked": 2,
+  "chunk_breakdown": [
+    { "chunk": 1, "bytes": 40960, "action": "allow" },
+    { "chunk": 2, "bytes": 40960, "action": "block" },
+    { "chunk": 3, "bytes": 12480, "action": "block" }
+  ],
   "reasons": [{ "message": "Prompt injection detected" }],
+  "harmful_content": [],
+  "sensitive_information_rules": [],
+  "prompt_attack_detected": true,
   "mitre_attack": ["T1190"],
   "owasp": ["LLM01"],
   "malicious_prompt_snippet": "Ignore previous instructions and...",
-  "full_scan_result": { ... }
+  "full_scan_result": { "..." : "..." }
 }
 ```
+
+For single-chunk files, `chunks_scanned` is `1` and `chunk_breakdown` has one
+entry. The `malicious_prompt_snippet` is taken from the start of the first
+blocking chunk.
 
 ---
 
@@ -451,19 +505,32 @@ Files are written to `s3://<log-bucket>/logs/YYYY/MM/DD/<filename>_<timestamp>.j
 ```
 AI Guard S3 Monitor - Security Alert
 ==================================================
+
 File Name : uploads/report.pdf
 SHA-256   : e3b0c44298fc1c...
 Scan ID   : a1b2c3d4-e5f6-...
 Action    : BLOCK
+Chunks    : 2 of 3 blocked
+
+Chunk Breakdown:
+  chunk   1/3   40960 bytes  allow
+  chunk   2/3   40960 bytes  BLOCK
+  chunk   3/3   12480 bytes  BLOCK
 
 Detection Reasons:
   - Prompt injection detected
+
+Prompt Attack Detected: yes
 
 OWASP LLM Top 10 References:
   - LLM01
 
 Please review the file immediately and take appropriate action.
+
+- AI Guard AWS Monitor
 ```
+
+For single-chunk files the chunk breakdown section is omitted.
 
 ---
 
@@ -491,8 +558,8 @@ make test
 - The S3 notification on the source bucket is added by a CloudFormation
   custom resource that preserves any existing notifications and removes
   only its own entry on stack delete.
-- `cfn-deploy.sh` contains your API key in plaintext and is `.gitignore`d.
-  Do not commit it.
+- `cfn-deploy-<stack-name>.sh` contains your API key in plaintext and is
+  `.gitignore`d (`cfn-deploy-*.sh`). Do not commit it.
 
 ---
 
@@ -507,13 +574,13 @@ make test
 |-- build.sh                   # Build + upload + 'aws lambda update-function-code'
 |-- Makefile                   # install / uninstall / configure / build / deploy / destroy / test / lint
 |-- src/                       # Lambda function source
-|   |-- handler.py
-|   |-- ai_guard_client.py
-|   |-- text_extractor.py
-|   |-- notifier.py
+|   |-- handler.py             # Entry point: URL-decode key, chunk text, scan loop, tagging
+|   |-- ai_guard_client.py     # AI Guard API client with retry/backoff
+|   |-- text_extractor.py      # File-type text extraction (PDF, DOCX, XLSX, PPTX, ...)
+|   |-- notifier.py            # S3 detection log writer + SES email sender
 |   |-- requirements.txt
 |-- tests/                     # pytest suite (moto + responses mocks)
-|-- cfn-deploy.example.sh      # Example of the generated cfn-deploy.sh
+|-- cfn-deploy.example.sh      # Annotated example of the generated cfn-deploy-<stack>.sh
 |-- requirements-dev.txt
 `-- README.md
 ```
